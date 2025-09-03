@@ -1,0 +1,77 @@
+---
+title: "MERGE_5"
+output: html_document
+date: "2025-01-08"
+---
+```{r}
+# Main execution
+# Read data files
+library(data.table)
+library(dplyr) 
+final_key <- fread("final_key.csv")
+```
+
+
+```{r}
+# Initial setup code remains same
+rename_cols <- function(dt, suffix) {
+  cols_to_rename <- setdiff(names(dt), c("player_id", "year", "week"))
+  setnames(dt, old = cols_to_rename, new = paste0(cols_to_rename, "_", suffix))
+  return(dt)
+}
+
+# Read and rename lookups
+lookup1 <- rename_cols(fread("player_stats_lookup.csv.gz"), "12w")
+lookup2 <- rename_cols(fread("player_stats_lookup2.csv.gz"), "2w")
+lookup3 <- rename_cols(fread("player_yearly_lookup3.csv.gz"), "3y")
+lookup3 <- lookup3[year >= 2016 & year <= 2023]
+
+# Merge weekly lookups
+lookup_merged <- merge(lookup1, lookup2, by = c("player_id", "year", "week"))
+
+# Process by year
+years <- 2016:2023
+results <- list()
+
+for(yr in years) {
+  cat("Processing year: ", yr, "\n")
+  merged_subset <- lookup_merged[year == yr]
+  lookup3_subset <- lookup3[year == yr]
+  
+  year_result <- merge(merged_subset, lookup3_subset, 
+                      by=c("player_id", "year"), 
+                      allow.cartesian=TRUE)
+  
+  fwrite(year_result, sprintf("lookup_all_%d.csv.gz", yr))
+  rm(year_result, merged_subset, lookup3_subset)
+  gc()
+}
+
+
+```
+
+
+
+
+```{r}
+# Process one file at a time
+years <- 2016:2023
+out_file <- "lookup_all.csv.gz"
+
+# Write first year directly
+fwrite(fread(sprintf("lookup_all_%d.csv.gz", years[1])), out_file)
+
+# Append remaining years
+for(yr in years[-1]) {
+ fwrite(fread(sprintf("lookup_all_%d.csv.gz", yr)), 
+        out_file, 
+        append=TRUE)
+}
+```
+
+```{r}
+lookup_all <- fread("lookup_all.csv.gz")
+    
+```
+
+

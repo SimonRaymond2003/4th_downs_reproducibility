@@ -1,0 +1,154 @@
+---
+title: "crowds"
+output: pdf_document
+date: "2025-01-10"
+---
+
+We are scraping pfr crowd data
+
+```{r}
+# Install required packages if you haven't already
+# install.packages(c("rvest", "tidyverse", "httr"))
+
+library(rvest)
+library(tidyverse)
+library(httr)
+
+# Function to scrape attendance data for a given year
+scrape_nfl_attendance <- function(year) {
+  # Create URL
+  url <- paste0("https://www.pro-football-reference.com/years/", year, "/attendance.htm")
+  
+  # Add delay to be respectful to the server
+  Sys.sleep(2)
+  
+  tryCatch({
+    # Make the request with a user agent
+    response <- GET(
+      url,
+      user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    )
+    
+    # Read the HTML content
+    page <- read_html(response)
+    
+    # Extract the table
+    table <- page %>%
+      html_element("#attendance") %>%
+      html_table()
+    
+    # Add year column
+    table$Year <- year
+    
+    return(table)
+    
+  }, error = function(e) {
+    message(sprintf("Error scraping %d: %s", year, e$message))
+    return(NULL)
+  })
+}
+
+# Create vector of years
+years <- 2016:2023
+
+# Initialize empty list to store data frames
+all_data <- list()
+
+# Scrape data for each year
+for (year in years) {
+  message(sprintf("Scraping %d...", year))
+  df <- scrape_nfl_attendance(year)
+  if (!is.null(df)) {
+    all_data[[as.character(year)]] <- df
+  }
+}
+```
+
+
+```{r}
+# Combine all data frames
+combined_data <- bind_rows(all_data)
+# Continue from your previous code...
+clean_data <- combined_data %>%
+  # Remove any rows where Tm (Team) is NA or empty
+  filter(!is.na(Tm), Tm != "") %>%
+  # Convert numeric columns to proper format
+  mutate(across(where(is.character), ~na_if(., ""))) %>%
+  # Remove any footnote markers from team names if they exist
+  mutate(Tm = str_remove_all(Tm, "\\*|\\+")) %>%
+  # Replace NA with "0" in Week columns, but keep "Bye" as is
+  mutate(across(starts_with("Week"), ~ifelse(is.na(.), "0", .)))
+
+str(clean_data)
+
+clean_data <- clean_data %>%
+  mutate(across(starts_with("Week"), ~{
+    # Replace "Bye" with NA and remove commas
+    num_str <- ifelse(. == "Bye", NA_character_, gsub(",", "", .))
+    # Convert to numeric
+    as.numeric(num_str)
+  })) %>%
+  # Also clean Total, Home, and Away columns
+  mutate(across(c(Total, Home, Away), ~{
+    as.numeric(gsub(",", "", .))
+  }))
+# Create team name to abbreviation mapping
+team_mapping <- c(
+    "Arizona Cardinals" = "ARI",
+    "Atlanta Falcons" = "ATL",
+    "Baltimore Ravens" = "BAL",
+    "Buffalo Bills" = "BUF",
+    "Carolina Panthers" = "CAR",
+    "Chicago Bears" = "CHI",
+    "Cincinnati Bengals" = "CIN",
+    "Cleveland Browns" = "CLE",
+    "Dallas Cowboys" = "DAL",
+    "Denver Broncos" = "DEN",
+    "Detroit Lions" = "DET",
+    "Green Bay Packers" = "GB",
+    "Houston Texans" = "HOU",
+    "Indianapolis Colts" = "IND",
+    "Jacksonville Jaguars" = "JAX",
+    "Kansas City Chiefs" = "KC",
+    "Los Angeles Rams" = "LA",
+    "Miami Dolphins" = "MIA",
+    "Minnesota Vikings" = "MIN",
+    "New England Patriots" = "NE",
+    "New Orleans Saints" = "NO",
+    "New York Giants" = "NYG",
+    "New York Jets" = "NYJ",
+    "Oakland Raiders" = "LV", # Will need special handling for year transition
+    "Las Vegas Raiders" = "LV",
+    "Philadelphia Eagles" = "PHI",
+    "Pittsburgh Steelers" = "PIT",
+    "San Diego Chargers" = "LAC", # Will need special handling for year transition
+    "Los Angeles Chargers" = "LAC",
+    "San Francisco 49ers" = "SF",
+    "Seattle Seahawks" = "SEA",
+    "Tampa Bay Buccaneers" = "TB",
+    "Tennessee Titans" = "TEN",
+    "Washington Redskins" = "WAS", # Will need special handling for name changes
+    "Washington Football Team" = "WAS",
+    "Washington Commanders" = "WAS"
+)
+
+# Add Team column as first column
+clean_data <- clean_data %>%
+  mutate(Team = team_mapping[Tm]) %>%
+  select(Team, everything())
+
+#kill the Tm col
+clean_data <- clean_data %>%
+  select(-Tm)
+
+write.csv(clean_data, "nfl_attendance_2016_2023.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+str(clean_data)
+```
+
+
+

@@ -1,0 +1,89 @@
+---
+title: "rost_names"
+output: html_document
+date: "2024-12-19"
+---
+
+```{r}
+library(nflreadr)
+library(dplyr)
+```
+
+
+```{r}
+# Load fantasy football player IDs crosswalk
+players <- load_ff_playerids()
+```
+
+
+
+```{r}
+# Load multiple seasons
+rosters_multiple <- load_rosters(seasons = 2016:2023)
+```
+
+get only the gsis_id, pff_id, team and full name cols
+```{r}
+rm <- rosters_multiple %>% select(gsis_id, pff_id, team, full_name, season, position, depth_chart_position)
+```
+
+
+```{r}
+# First, let's get the earliest and latest seasons for each player
+player_years <- rm %>%
+  group_by(gsis_id) %>%
+  summarise(
+    earliest_season = min(season),
+    latest_season = max(season)
+  )
+
+# Get unique teams for each player in chronological order
+player_teams <- rm %>%
+  arrange(season) %>%  # Sort by season first
+  group_by(gsis_id) %>%
+  summarise(
+    teams = list(unique(team))  # Get unique teams in order
+  ) %>%
+  rowwise() %>%
+  mutate(
+    # Create columns for each team position (up to 6 teams, add more if needed)
+    team1 = if(length(teams) >= 1) teams[[1]] else NA_character_,
+    team2 = if(length(teams) >= 2) teams[[2]] else NA_character_,
+    team3 = if(length(teams) >= 3) teams[[3]] else NA_character_,
+    team4 = if(length(teams) >= 4) teams[[4]] else NA_character_,
+    team5 = if(length(teams) >= 5) teams[[5]] else NA_character_,
+    team6 = if(length(teams) >= 6) teams[[6]] else NA_character_,
+    team7 = if(length(teams) >= 7) teams[[7]] else NA_character_,
+    team8 = if(length(teams) >= 8) teams[[8]] else NA_character_
+  ) %>%
+  select(-teams)  # Remove the list column
+
+# Get the most recent position and depth chart position
+player_position <- rm %>%
+  group_by(gsis_id) %>%
+  arrange(desc(season)) %>%
+  slice(1) %>%
+  select(gsis_id, position, depth_chart_position)
+
+# Get the most recent full name (in case there were any changes)
+player_names <- rm %>%
+  group_by(gsis_id) %>%
+  arrange(desc(season)) %>%
+  slice(1) %>%
+  select(gsis_id, pff_id, full_name)
+
+# Combine all the information
+final_roster <- player_names %>%
+  left_join(player_years, by = "gsis_id") %>%
+  left_join(player_position, by = "gsis_id") %>%
+  left_join(player_teams, by = "gsis_id")
+
+# View the final result
+head(final_roster)
+```
+
+write the rosters
+```{r}
+write.csv(final_roster, "roster.csv")
+```
+

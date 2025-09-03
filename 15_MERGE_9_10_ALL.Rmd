@@ -1,0 +1,201 @@
+---
+title: "MERGE_UNIFIED - Single Files Per Dataset"
+output: html_document
+date: "2025-03-04"
+---
+
+# Unified Data Processing for NFL Analysis
+# Creates ONE file each for CAFD, CFD, and CTD
+# KILLS all player columns not in saved var names, then applies kicker/punter rules
+
+```{r}
+#clear the env
+rm(list = ls())
+
+library(data.table)
+library(dplyr)
+
+process_cafd_unified <- function(merged_data) {
+  cat("\n=== Processing Unified CAFD ===\n")
+  
+  # Read the unified player variables
+  cat("Reading nfl_player_grades_columns.csv...")
+  player_vars <- read.csv("nfl_player_grades_columns.csv", stringsAsFactors = FALSE)$column_name
+  
+  cat("\nTotal approved player columns:", length(player_vars))
+  
+  # Get all player columns (starter_offense, starter_defense, kicker_id, punter_id patterns)
+  all_player_cols <- grep("^(starter_(offense|defense)_[A-Z]+_[0-9]+_|kicker_id_|punter_id_)", names(merged_data), value = TRUE)
+  cat("\nTotal player columns found in data:", length(all_player_cols))
+  
+  # KILL all player columns that are NOT in our approved list
+  approved_player_cols <- intersect(player_vars, all_player_cols)
+  killed_player_cols <- setdiff(all_player_cols, player_vars)
+  
+  cat("\nApproved player columns to keep:", length(approved_player_cols))
+  cat("\nPlayer columns to KILL:", length(killed_player_cols))
+  
+  # For CAFD, keep ALL approved player columns (including approved kicker/punter)
+  # Any kicker/punter not in approved list was already killed above
+  final_player_cols <- approved_player_cols
+  
+  cat("\nCAFD now keeps all approved columns including approved kicker/punter")
+  
+  # Select base columns (all non-player columns)
+  base_cols <- setdiff(names(merged_data), all_player_cols)
+  cat("\nBase columns to keep:", length(base_cols))
+  
+  # Combine final selection
+  selected_cols <- c(base_cols, final_player_cols)
+  
+  # Create the unified dataset
+  cafd_unified <- merged_data[, ..selected_cols]
+  
+  # Save unified CAFD file
+  output_filename <- "predict_cafd_unified.csv.gz"
+  fwrite(cafd_unified, output_filename, compress="gzip")
+  cat("\nSaved unified CAFD as", output_filename)
+  cat("\nDimensions:", nrow(cafd_unified), "x", ncol(cafd_unified))
+  
+  return(cafd_unified)
+}
+
+# Function to process CFD (KEEPS approved kicker/punter columns)
+process_cfd_unified <- function(merged_data) {
+  cat("\n=== Processing Unified CFD ===\n")
+  
+  # Read the unified player variables
+  cat("Reading nfl_player_grades_columns.csv...")
+  player_vars <- read.csv("nfl_player_grades_columns.csv", stringsAsFactors = FALSE)$column_name
+  
+  cat("\nTotal approved player columns:", length(player_vars))
+  
+  # Get all player columns (starter_offense, starter_defense, kicker_id, punter_id patterns)
+  all_player_cols <- grep("^(starter_(offense|defense)_[A-Z]+_[0-9]+_|kicker_id_|punter_id_)", names(merged_data), value = TRUE)
+  cat("\nTotal player columns found in data:", length(all_player_cols))
+  
+  # KILL all player columns that are NOT in our approved list
+  approved_player_cols <- intersect(player_vars, all_player_cols)
+  killed_player_cols <- setdiff(all_player_cols, player_vars)
+  
+  cat("\nApproved player columns to keep:", length(approved_player_cols))
+  cat("\nPlayer columns to KILL:", length(killed_player_cols))
+  
+  # For CFD, keep ALL approved player columns (including approved kicker/punter)
+  # Any kicker/punter not in approved list was already killed above
+  final_player_cols <- approved_player_cols
+  
+  cat("\nCFD keeps all approved columns including approved kicker/punter")
+  
+  # Select base columns (all non-player columns)
+  base_cols <- setdiff(names(merged_data), all_player_cols)
+  cat("\nBase columns to keep:", length(base_cols))
+  
+  # Combine final selection
+  selected_cols <- c(base_cols, final_player_cols)
+  
+  # Create the unified dataset
+  cfd_unified <- merged_data[, ..selected_cols]
+  
+  # Save unified CFD file
+  output_filename <- "predict_cfd_unified.csv.gz"
+  fwrite(cfd_unified, output_filename, compress="gzip")
+  cat("\nSaved unified CFD as", output_filename)
+  cat("\nDimensions:", nrow(cfd_unified), "x", ncol(cfd_unified))
+  
+  return(cfd_unified)
+}
+
+# Function to process CTD (KEEPS approved kicker/punter columns)
+process_ctd_unified <- function(merged_data) {
+  cat("\n=== Processing Unified CTD ===\n")
+  
+  # Read the unified player variables
+  cat("Reading nfl_player_grades_columns.csv...")
+  player_vars <- read.csv("nfl_player_grades_columns.csv", stringsAsFactors = FALSE)$column_name
+  
+  cat("\nTotal approved player columns:", length(player_vars))
+  
+  # Get all player columns - for CTD we need to handle both starter_ and non-starter_ patterns
+  starter_player_cols <- grep("^starter_(offense|defense)_[A-Z]+_[0-9]+_", names(merged_data), value = TRUE)
+  regular_player_cols <- grep("^(offense|defense)_[A-Z]+_[0-9]+_", names(merged_data), value = TRUE)
+  kicker_punter_cols <- grep("^(kicker_id_|punter_id_)", names(merged_data), value = TRUE)
+  
+  all_player_cols <- unique(c(starter_player_cols, regular_player_cols, kicker_punter_cols))
+  cat("\nTotal player columns found in data:", length(all_player_cols))
+  
+  # Check what pattern exists in the data and adjust player_vars accordingly
+  has_starter_cols <- length(starter_player_cols) > 0
+  has_regular_cols <- length(regular_player_cols) > 0
+  
+  if(has_starter_cols && !has_regular_cols) {
+    # Data has starter columns, use player_vars as is
+    comparison_vars <- player_vars
+  } else if(has_regular_cols && !has_starter_cols) {
+    # Data has regular columns, remove starter_ prefix from player_vars for comparison
+    comparison_vars <- gsub("^starter_", "", player_vars)
+  } else {
+    # Data has both or neither, use player_vars as is
+    comparison_vars <- player_vars
+  }
+  
+  # KILL all player columns that are NOT in our approved list
+  approved_player_cols <- intersect(comparison_vars, all_player_cols)
+  killed_player_cols <- setdiff(all_player_cols, comparison_vars)
+  
+  cat("\nApproved player columns to keep:", length(approved_player_cols))
+  cat("\nPlayer columns to KILL:", length(killed_player_cols))
+  
+  # For CTD, keep ALL approved player columns (including approved kicker/punter)
+  # Any kicker/punter not in approved list was already killed above
+  final_player_cols <- approved_player_cols
+  
+  cat("\nCTD keeps all approved columns including approved kicker/punter")
+  
+  # Select base columns (all non-player columns)
+  base_cols <- setdiff(names(merged_data), all_player_cols)
+  cat("\nBase columns to keep:", length(base_cols))
+  
+  # Combine final selection
+  selected_cols <- c(base_cols, final_player_cols)
+  
+  # Create the unified dataset
+  ctd_unified <- merged_data[, ..selected_cols]
+  
+  # Save unified CTD file
+  output_filename <- "predict_ctd_unified.csv.gz"
+  fwrite(ctd_unified, output_filename, compress="gzip")
+  cat("\nSaved unified CTD as", output_filename)
+  cat("\nDimensions:", nrow(ctd_unified), "x", ncol(ctd_unified))
+  
+  return(ctd_unified)
+}
+
+# Main processing function for all unified datasets
+process_all_unified_datasets <- function() {
+  cat("Starting unified data processing...\n")
+  cat("LOGIC: KILL all player cols not in approved list, then apply kicker/punter rules\n\n")
+  
+  # Process CAFD
+  cat("Loading CAFD data...")
+  cafd_merged <- fread("all_merged_cafd.csv.gz")
+  cafd_result <- process_cafd_unified(cafd_merged)
+  rm(cafd_merged); gc()
+  
+  # Process CFD
+  cat("\n\nLoading CFD data...")
+  cfd_merged <- fread("all_merged_cfd.csv.gz")
+  cfd_result <- process_cfd_unified(cfd_merged)
+  rm(cfd_merged); gc()
+  
+  # Process CTD
+  cat("\n\nLoading CTD data...")
+  ctd_merged <- fread("all_merged_ctd.csv.gz")
+  ctd_result <- process_ctd_unified(ctd_merged)
+  rm(ctd_merged); gc()
+  
+  cat("\n\n=== All unified datasets processed successfully! ===\n")
+}
+
+process_all_unified_datasets()
+```

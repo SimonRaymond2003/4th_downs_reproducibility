@@ -1,0 +1,1831 @@
+---
+title: "Final Data Prep - Unified Version"
+output: html_document
+date: "2025-06-24"
+---
+
+
+```{r}
+library(data.table)
+
+# Read the new unified datasets
+cafd_unified <- fread("predict_cafd_unified.csv.gz")
+cfd_unified <- fread("predict_cfd_unified.csv.gz")
+ctd_unified <- fread("predict_ctd_unified.csv.gz")
+```
+
+```{r}
+# Load required libraries
+library(nflverse)
+library(dplyr)
+library(data.table)
+
+# Load play-by-play data from 2016-2023 (already loaded above as pbp_data)
+pbp_data <- load_pbp(2016:2023)
+
+# Calculate team 4th down field goal attempt rates in the 40-50 yard range
+team_fg_attempt_stats <- pbp_data %>%
+  # Filter for 4th down plays in the 30-50 yard range from opponent's endzone
+  filter(
+    !is.na(posteam), 
+    !is.na(down),
+    down == 4,
+    yardline_100 >= 30 & yardline_100 <= 50
+  ) %>%
+  # Add helper columns
+  mutate(
+    # Convert game_date to proper date format
+    game_date = as.Date(game_date),
+    # Identify field goal attempts
+    is_fg_attempt = play_type == "field_goal"
+  ) %>%
+  # Group by team, season, week, game to calculate game-level stats
+  group_by(posteam, season, week, game_date, game_id) %>%
+  summarise(
+    # Count 4th downs in 30-50 yard range and FG attempts within that range
+    fourth_downs_30_50 = n(),
+    fg_attempts_30_50 = sum(is_fg_attempt, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  # Arrange by team, season, week to ensure proper chronological order
+  arrange(posteam, season, week) %>%
+  # Group by team and season to calculate cumulative stats within each season
+  group_by(posteam, season) %>%
+  # Calculate cumulative statistics (excluding current game using lag)
+  mutate(
+    # Cumulative totals (lagged by 1 to exclude current game)
+    cum_fourth_downs_30_50 = lag(cumsum(fourth_downs_30_50), default = 0),
+    cum_fg_attempts_30_50 = lag(cumsum(fg_attempts_30_50), default = 0),
+    
+    # Calculate percentage (will be NA/0 for first game of each season)
+    fg_attempt_rate_30_50 = ifelse(cum_fourth_downs_30_50 > 0, 
+                                   cum_fg_attempts_30_50 / cum_fourth_downs_30_50, 
+                                   0)
+  ) %>%
+  ungroup() %>%
+  # Select only the columns we need for joining
+  select(posteam, season, week, game_date, game_id, fg_attempt_rate_30_50, cum_fourth_downs_30_50)
+
+# Function to add FG attempt rate stats to any dataset
+add_fg_attempt_rate <- function(data) {
+  # Convert to data.table for efficient joining
+  setDT(data)
+  setDT(team_fg_attempt_stats)
+  
+  # Convert game_date to Date format if it's not already
+  if (!inherits(data$game_date, "Date")) {
+    data[, game_date := as.Date(game_date)]
+  }
+  
+  # Join the statistics
+  result <- team_fg_attempt_stats[data, on = .(posteam, season, week, game_date, game_id)]
+  
+  # If no match found, set the new columns to 0 (meaning no previous data)
+  result[is.na(fg_attempt_rate_30_50), fg_attempt_rate_30_50 := 0]
+  result[is.na(cum_fourth_downs_30_50), cum_fourth_downs_30_50 := 0]
+  
+  return(result)
+}
+
+# Add FG attempt rate statistics to your datasets
+cafd_unified <- add_fg_attempt_rate(cafd_unified)
+cfd_unified <- add_fg_attempt_rate(cfd_unified)
+ctd_unified <- add_fg_attempt_rate(ctd_unified)
+
+# Display summary of new columns for verification
+cat("New fg_attempt_rate_30_50 and cum_fourth_downs_30_50 columns added successfully!\n")
+cat("Summary of fg_attempt_rate_30_50 in cafd_unified:\n")
+print(summary(cafd_unified[, .(fg_attempt_rate_30_50)]))
+cat("Summary of cum_fourth_downs_30_50 in cafd_unified:\n")
+print(summary(cafd_unified[, .(cum_fourth_downs_30_50)]))
+
+# Check some examples to verify the logic
+cat("\nSample data showing both new columns:\n")
+sample_data <- cafd_unified %>%
+  select(season, week, posteam, game_date, fg_attempt_rate_30_50, cum_fourth_downs_30_50) %>%
+  arrange(posteam, season, week) %>%
+  filter(posteam == "NE") %>%  # Example with Patriots
+  head(15)
+print(sample_data)
+
+cat("\nNote: Week 1 games and first games of each season will have both columns = 0")
+cat("\nas there are no previous games in that season to calculate from.\n")
+```
+
+```{r}
+# Load required libraries
+library(nflverse)
+library(data.table)
+library(dplyr)
+
+# Load the data
+depth_charts <- load_depth_charts(2017:2023)
+rosters <- load_rosters(2017:2023)
+
+# Get birth dates from roster data
+player_birthdays <- rosters %>%
+  select(gsis_id, birth_date) %>%
+  filter(!is.na(birth_date)) %>%
+  distinct()
+
+# Join depth chart data with birth dates using gsis_id
+depth_with_birthdays <- depth_charts %>%
+  left_join(player_birthdays, by = "gsis_id")
+
+# Calculate age based on the season year (using September 1st as reference)
+depth_with_ages <- depth_with_birthdays %>%
+  filter(!is.na(birth_date)) %>%
+  mutate(
+    season_start_date = as.Date(paste0(season, "-09-01")),
+    calculated_age = as.numeric(difftime(season_start_date, birth_date, units = "days")) / 365.25
+  )
+
+# Calculate average team ages by season, week, and team
+team_avg_ages <- depth_with_ages %>%
+  group_by(season, week, club_code) %>%
+  summarise(
+    avg_team_age = mean(calculated_age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rename(team = club_code)
+
+# Function to add team ages to your datasets
+add_team_ages <- function(data, team_ages) {
+  # Add average age for posteam (offensive team)
+  data_with_ages <- data %>%
+    left_join(team_ages, 
+              by = c("season" = "season", "week" = "week", "posteam" = "team")) %>%
+    rename(posteam_avg_age = avg_team_age)
+  
+  # Add average age for defteam (defensive team)
+  data_with_ages <- data_with_ages %>%
+    left_join(team_ages, 
+              by = c("season" = "season", "week" = "week", "defteam" = "team")) %>%
+    rename(defteam_avg_age = avg_team_age)
+  
+  return(data_with_ages)
+}
+
+# Add team ages to all three datasets
+print("Adding team ages to cafd_unified...")
+cafd_unified <- add_team_ages(cafd_unified, team_avg_ages)
+
+print("Adding team ages to cfd_unified...")
+cfd_unified <- add_team_ages(cfd_unified, team_avg_ages)
+
+print("Adding team ages to ctd_unified...")
+ctd_unified <- add_team_ages(ctd_unified, team_avg_ages)
+
+# Check the results
+print("New columns added to datasets:")
+new_cols <- names(cafd_unified)[grepl("avg_age", names(cafd_unified))]
+print(new_cols)
+
+print("Sample of cafd_unified with new age columns:")
+sample_data <- cafd_unified %>%
+  select(season, week, posteam, defteam, posteam_avg_age, defteam_avg_age) %>%
+  head(10)
+print(sample_data)
+
+print("Summary of team ages:")
+print(summary(cafd_unified$posteam_avg_age))
+print(summary(cafd_unified$defteam_avg_age))
+```
+
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(readr) # For read_csv
+
+# --- 1. Read the Saved Indexes ---
+# Load the coach experience and tenure data you created earlier.
+coach_experience_index <- read_csv("coach_experience_index.csv")
+coach_tenure_index <- read_csv("coach_tenure_index.csv")
+
+# --- 2. Define a Function to Add Coach Information ---
+# This function will take a dataframe and add the experience and tenure columns.
+add_coach_info <- function(df) {
+  
+  # ADDED: Check if the input is a data.table to preserve its class
+  is_dt <- is.data.table(df)
+
+  # Check if required columns exist
+  required_cols <- c("posteam_coach", "season", "posteam", "game_id", "play_id")
+  if (!all(required_cols %in% names(df))) {
+    stop("The input dataframe is missing one or more required columns: posteam_coach, season, posteam, game_id, play_id")
+  }
+
+  # Add Coach Experience
+  df_with_exp <- df %>%
+    left_join(coach_experience_index, by = c("posteam_coach" = "coach")) %>%
+    mutate(
+      coach_experience = ifelse(is.na(first_season_experience), NA, season - first_season_experience + 1)
+    ) %>%
+    select(-first_season_experience)
+
+  # Add Coach Tenure
+  df_std_team <- df_with_exp %>%
+    mutate(franchise = case_when(
+      posteam %in% c("STL", "LA")  ~ "LAR",
+      posteam %in% c("SD", "LAC") ~ "LAC",
+      posteam %in% c("OAK", "LV")  ~ "LVR",
+      TRUE ~ posteam
+    ))
+
+  df_with_tenure <- df_std_team %>%
+    left_join(
+      coach_tenure_index, 
+      by = c("posteam_coach" = "coach", "franchise" = "team")
+    ) %>%
+    filter(is.na(first_season_of_stint) | season >= first_season_of_stint) %>%
+    group_by(game_id, play_id) %>%
+    filter(is.na(first_season_of_stint) | first_season_of_stint == max(first_season_of_stint)) %>%
+    ungroup() %>%
+    mutate(
+      coach_tenure = ifelse(is.na(first_season_of_stint), NA, season - first_season_of_stint + 1)
+    ) %>%
+    select(-franchise, -first_season_of_stint)
+    
+  # ADDED: Convert back to data.table if the original was one
+  if (is_dt) {
+    setDT(df_with_tenure)
+  }
+
+  return(df_with_tenure)
+}
+
+# --- 3. Apply the Function to Your DataFrames ---
+
+cafd_unified <- add_coach_info(cafd_unified)
+cfd_unified <- add_coach_info(cfd_unified)
+ctd_unified <- add_coach_info(ctd_unified)
+
+
+```
+
+
+
+
+
+
+```{r}
+#read the coaches csv in
+coaches <- fread("coaches.csv")
+```
+
+```{r}
+# Add posteam_coach_age column to all three datasets
+cafd_unified <- cafd_unified[coaches, on = .(posteam_coach = coach_name)]
+cafd_unified[, posteam_coach_age := season - birth_year]
+
+cfd_unified <- cfd_unified[coaches, on = .(posteam_coach = coach_name)]
+cfd_unified[, posteam_coach_age := season - birth_year]
+
+ctd_unified <- ctd_unified[coaches, on = .(posteam_coach = coach_name)]
+ctd_unified[, posteam_coach_age := season - birth_year]
+```
+
+
+```{r}
+# # Function to create attendance quintile indicators
+# create_attendance_quintiles <- function(dt) {
+#   # Check if home_attendance column exists
+#   if (!"home_attendance" %in% names(dt)) {
+#     warning("home_attendance column not found in dataset")
+#     return(dt)
+#   }
+#   
+#   # Remove rows with missing attendance data for quintile calculation
+#   attendance_data <- dt[!is.na(home_attendance), home_attendance]
+#   
+#   if (length(attendance_data) == 0) {
+#     warning("No non-missing attendance data found")
+#     return(dt)
+#   }
+#   
+#   # Calculate quintiles (20th, 40th, 60th, 80th percentiles)
+#   quintiles <- quantile(attendance_data, probs = c(0.2, 0.4, 0.6, 0.8), na.rm = TRUE)
+#   
+#   cat("Attendance quintiles:\n")
+#   cat("Q1 (20th percentile):", quintiles[1], "\n")
+#   cat("Q2 (40th percentile):", quintiles[2], "\n")
+#   cat("Q3 (60th percentile):", quintiles[3], "\n") 
+#   cat("Q4 (80th percentile):", quintiles[4], "\n")
+#   
+#   # Create quintile indicators (Q3 will be omitted as base case - middle quintile)
+#   dt[, attendance_q1 := as.integer(!is.na(home_attendance) & home_attendance <= quintiles[1])]
+#   dt[, attendance_q2 := as.integer(!is.na(home_attendance) & home_attendance > quintiles[1] & home_attendance <= quintiles[2])]
+#   dt[, attendance_q4 := as.integer(!is.na(home_attendance) & home_attendance > quintiles[3] & home_attendance <= quintiles[4])]
+#   dt[, attendance_q5 := as.integer(!is.na(home_attendance) & home_attendance > quintiles[4])]
+#   
+#   # Handle missing values - set all indicators to 0 when attendance is missing
+#   dt[is.na(home_attendance), c("attendance_q1", "attendance_q2", "attendance_q4", "attendance_q5") := 0]
+#   
+#   # Remove the original home_attendance column
+#   dt[, home_attendance := NULL]
+#   
+#   cat("Created attendance quintile indicators:\n")
+#   cat("- attendance_q1: First quintile (0-20th percentile, lowest attendance)\n")
+#   cat("- attendance_q2: Second quintile (20th-40th percentile)\n")
+#   cat("- attendance_q4: Fourth quintile (60th-80th percentile)\n")
+#   cat("- attendance_q5: Fifth quintile (80th-100th percentile, highest attendance)\n")
+#   cat("- Q3 (third quintile, 40th-60th percentile) omitted as base case\n")
+#   
+#   return(dt)
+# }
+# 
+# # Apply to all three datasets
+# cat("Processing CAFD dataset...\n")
+# cafd_unified <- create_attendance_quintiles(cafd_unified)
+# 
+# cat("\nProcessing CFD dataset...\n") 
+# cfd_unified <- create_attendance_quintiles(cfd_unified)
+# 
+# cat("\nProcessing CTD dataset...\n")
+# ctd_unified <- create_attendance_quintiles(ctd_unified)
+# 
+# # Verify the changes
+# cat("\n=== VERIFICATION ===\n")
+# cat("CAFD dataset:\n")
+# cat("Columns with 'attendance':", names(cafd_unified)[grepl("attendance", names(cafd_unified))], "\n")
+# cat("Attendance Q1 sum:", sum(cafd_unified$attendance_q1, na.rm = TRUE), "\n")
+# cat("Attendance Q2 sum:", sum(cafd_unified$attendance_q2, na.rm = TRUE), "\n")
+# cat("Attendance Q4 sum:", sum(cafd_unified$attendance_q4, na.rm = TRUE), "\n")
+# cat("Attendance Q5 sum:", sum(cafd_unified$attendance_q5, na.rm = TRUE), "\n")
+# 
+# cat("\nCFD dataset:\n")
+# cat("Columns with 'attendance':", names(cfd_unified)[grepl("attendance", names(cfd_unified))], "\n")
+# cat("Attendance Q1 sum:", sum(cfd_unified$attendance_q1, na.rm = TRUE), "\n")
+# cat("Attendance Q2 sum:", sum(cfd_unified$attendance_q2, na.rm = TRUE), "\n")
+# cat("Attendance Q4 sum:", sum(cfd_unified$attendance_q4, na.rm = TRUE), "\n")
+# cat("Attendance Q5 sum:", sum(cfd_unified$attendance_q5, na.rm = TRUE), "\n")
+# 
+# cat("\nCTD dataset:\n")
+# cat("Columns with 'attendance':", names(ctd_unified)[grepl("attendance", names(ctd_unified))], "\n")
+# cat("Attendance Q1 sum:", sum(ctd_unified$attendance_q1, na.rm = TRUE), "\n")
+# cat("Attendance Q2 sum:", sum(ctd_unified$attendance_q2, na.rm = TRUE), "\n")
+# cat("Attendance Q4 sum:", sum(ctd_unified$attendance_q4, na.rm = TRUE), "\n")
+# cat("Attendance Q5 sum:", sum(ctd_unified$attendance_q5, na.rm = TRUE), "\n")
+# 
+# # Check for any observations where all indicators are 0 (should be the base case Q3)
+# cafd_base_case <- sum(cafd_unified$attendance_q1 == 0 & cafd_unified$attendance_q2 == 0 & 
+#                       cafd_unified$attendance_q4 == 0 & cafd_unified$attendance_q5 == 0)
+# cfd_base_case <- sum(cfd_unified$attendance_q1 == 0 & cfd_unified$attendance_q2 == 0 & 
+#                      cfd_unified$attendance_q4 == 0 & cfd_unified$attendance_q5 == 0)
+# ctd_base_case <- sum(ctd_unified$attendance_q1 == 0 & ctd_unified$attendance_q2 == 0 & 
+#                      ctd_unified$attendance_q4 == 0 & ctd_unified$attendance_q5 == 0)
+# 
+# cat("\nBase case (Q3) counts:\n")
+# cat("CAFD base case (Q3) observations:", cafd_base_case, "\n")
+# cat("CFD base case (Q3) observations:", cfd_base_case, "\n")
+# cat("CTD base case (Q3) observations:", ctd_base_case, "\n")
+# 
+# cat("\nTransformation complete! Q3 (middle quintile) serves as base case for regression.")
+```
+
+
+```{r}
+# Load required libraries
+library(nflverse)
+library(dplyr)
+library(data.table)
+
+# Load play-by-play data from 2016-2023
+pbp_data <- load_pbp(2016:2023)
+
+# Calculate team statistics by game
+team_game_stats <- pbp_data %>%
+  # Filter for plays where we have team and down info, but keep ALL play types for 4th down counts
+  filter(!is.na(posteam), !is.na(down)) %>%
+  # Add helper columns
+  mutate(
+    # Convert game_date to proper date format
+    game_date = as.Date(game_date),
+    # Identify if play is in last 2 minutes of half
+    last_2min_half = half_seconds_remaining <= 120,
+    # Identify rush/pass attempts on any down
+    is_rush_pass_attempt = play_type %in% c("run", "pass")
+  ) %>%
+  # Group by team, season, week, game to calculate game-level stats
+  group_by(posteam, season, week, game_date, game_id) %>%
+  summarise(
+    # Down-specific conversion rates (only for rush/pass attempts)
+    down1_conversions = sum(down == 1 & is_rush_pass_attempt & first_down == 1, na.rm = TRUE),
+    down1_attempts = sum(down == 1 & is_rush_pass_attempt, na.rm = TRUE),
+    down2_conversions = sum(down == 2 & is_rush_pass_attempt & first_down == 1, na.rm = TRUE),
+    down2_attempts = sum(down == 2 & is_rush_pass_attempt, na.rm = TRUE),
+    down3_conversions = sum(down == 3 & is_rush_pass_attempt & first_down == 1, na.rm = TRUE),
+    down3_attempts = sum(down == 3 & is_rush_pass_attempt, na.rm = TRUE),
+    down4_conversions = sum(down == 4 & is_rush_pass_attempt & first_down == 1, na.rm = TRUE),
+    down4_attempts = sum(down == 4 & is_rush_pass_attempt, na.rm = TRUE),
+    
+    # 4th down attempt rates (ALL 4th downs vs just rush/pass)
+    total_fourth_downs = sum(down == 4, na.rm = TRUE),
+    fourth_down_rush_pass_attempts = sum(down == 4 & is_rush_pass_attempt, na.rm = TRUE),
+    fourth_down_rush_pass_attempts_excl_2min = sum(down == 4 & is_rush_pass_attempt & !last_2min_half, na.rm = TRUE),
+    total_fourth_downs_excl_2min = sum(down == 4 & !last_2min_half, na.rm = TRUE),
+    
+    .groups = 'drop'
+  ) %>%
+  # Arrange by team, season, week to ensure proper chronological order
+  arrange(posteam, season, week) %>%
+  # Group by team to calculate cumulative stats
+  group_by(posteam) %>%
+  # Calculate cumulative statistics (excluding current game)
+  mutate(
+    # Cumulative attempts and conversions (lagged by 1 to exclude current game)
+    cum_down1_conversions = lag(cumsum(down1_conversions), default = 0),
+    cum_down1_attempts = lag(cumsum(down1_attempts), default = 0),
+    cum_down2_conversions = lag(cumsum(down2_conversions), default = 0),
+    cum_down2_attempts = lag(cumsum(down2_attempts), default = 0),
+    cum_down3_conversions = lag(cumsum(down3_conversions), default = 0),
+    cum_down3_attempts = lag(cumsum(down3_attempts), default = 0),
+    cum_down4_conversions = lag(cumsum(down4_conversions), default = 0),
+    cum_down4_attempts = lag(cumsum(down4_attempts), default = 0),
+    
+    # Cumulative 4th down stats
+    cum_total_fourth_downs = lag(cumsum(total_fourth_downs), default = 0),
+    cum_fourth_down_rush_pass_attempts = lag(cumsum(fourth_down_rush_pass_attempts), default = 0),
+    cum_fourth_down_rush_pass_attempts_excl_2min = lag(cumsum(fourth_down_rush_pass_attempts_excl_2min), default = 0),
+    cum_total_fourth_downs_excl_2min = lag(cumsum(total_fourth_downs_excl_2min), default = 0),
+    
+    # Calculate percentages (will be NA for first game of each team)
+    down1_conv_pct = ifelse(cum_down1_attempts > 0, cum_down1_conversions / cum_down1_attempts, NA_real_),
+    down2_conv_pct = ifelse(cum_down2_attempts > 0, cum_down2_conversions / cum_down2_attempts, NA_real_),
+    down3_conv_pct = ifelse(cum_down3_attempts > 0, cum_down3_conversions / cum_down3_attempts, NA_real_),
+    down4_conv_pct = ifelse(cum_down4_attempts > 0, cum_down4_conversions / cum_down4_attempts, NA_real_),
+    down4_attempt_pct = ifelse(cum_total_fourth_downs > 0, cum_fourth_down_rush_pass_attempts / cum_total_fourth_downs, NA_real_),
+    down4_attempt_pct_excl_2min = ifelse(cum_total_fourth_downs_excl_2min > 0, cum_fourth_down_rush_pass_attempts_excl_2min / cum_total_fourth_downs_excl_2min, NA_real_)
+  ) %>%
+  ungroup() %>%
+  # Select only the columns we need for joining
+  select(posteam, season, week, game_date, game_id, 
+         down1_conv_pct, down2_conv_pct, down3_conv_pct, down4_conv_pct, 
+         down4_attempt_pct, down4_attempt_pct_excl_2min)
+
+# Function to add stats to any dataset
+add_team_stats <- function(data) {
+  # Convert to data.table for efficient joining
+  setDT(data)
+  setDT(team_game_stats)
+  
+  # Convert game_date to Date format if it's not already
+  if (!inherits(data$game_date, "Date")) {
+    data[, game_date := as.Date(game_date)]
+  }
+  
+  # Join the statistics
+  result <- team_game_stats[data, on = .(posteam, season, week, game_date, game_id)]
+  
+  # If no match found, set the new columns to NA
+  result[is.na(down1_conv_pct), `:=`(
+    down1_conv_pct = NA_real_,
+    down2_conv_pct = NA_real_, 
+    down3_conv_pct = NA_real_,
+    down4_conv_pct = NA_real_,
+    down4_attempt_pct = NA_real_,
+    down4_attempt_pct_excl_2min = NA_real_
+  )]
+  
+  return(result)
+}
+
+# Add statistics to your datasets
+cafd_unified <- add_team_stats(cafd_unified)
+cfd_unified <- add_team_stats(cfd_unified)
+ctd_unified <- add_team_stats(ctd_unified)
+
+# Display summary of new columns for verification
+cat("New columns added successfully!\n")
+cat("Summary of new statistics in cafd_unified:\n")
+print(summary(cafd_unified[, .(down1_conv_pct, down2_conv_pct, down3_conv_pct, down4_conv_pct, down4_attempt_pct, down4_attempt_pct_excl_2min)]))
+```
+
+
+```{r}
+# CREATE my_id for ALL datasets immediately after loading
+create_my_id <- function(dt, dataset_name) {
+  if("play_id" %in% names(dt) && "game_id" %in% names(dt)) {
+    dt[, my_id := paste0(game_id, "_", play_id)]
+    cat("Created my_id for", dataset_name, "- Sample:", head(dt$my_id, 3), "\n")
+  } else {
+    cat("WARNING: Cannot create my_id for", dataset_name, "- missing play_id or game_id\n")
+  }
+  return(dt)
+}
+
+# Create my_id for all datasets
+cafd_unified <- create_my_id(cafd_unified, "cafd_unified")
+cfd_unified <- create_my_id(cfd_unified, "cfd_unified")
+ctd_unified <- create_my_id(ctd_unified, "ctd_unified")
+
+# Filter by play_type immediately after reading
+# CFD datasets: keep only punt, field_goal, pass, and run
+if ("play_type" %in% names(cfd_unified)) {
+  rows_before <- nrow(cfd_unified)
+  cfd_unified <- cfd_unified[play_type %in% c("punt", "field_goal", "pass", "run")]
+  cat("cfd_unified: Filtered from", rows_before, "to", nrow(cfd_unified), "rows\n")
+}
+
+# CTD and CAFD datasets: keep only run and pass
+if ("play_type" %in% names(ctd_unified)) {
+  rows_before <- nrow(ctd_unified)
+  ctd_unified <- ctd_unified[play_type %in% c("run", "pass")]
+  cat("ctd_unified: Filtered from", rows_before, "to", nrow(ctd_unified), "rows\n")
+}
+
+if ("play_type" %in% names(cafd_unified)) {
+  rows_before <- nrow(cafd_unified)
+  cafd_unified <- cafd_unified[play_type %in% c("run", "pass")]
+  cat("cafd_unified: Filtered from", rows_before, "to", nrow(cafd_unified), "rows\n")
+}
+
+# SPECIAL FILTERING FOR CTD AND CFD: Remove rows with NA/blank kicker or punter columns
+# Filter CTD dataset
+kicker_punter_cols_ctd <- grep("^(kicker|punter)", names(ctd_unified), value = TRUE)
+
+if (length(kicker_punter_cols_ctd) > 0) {
+  rows_before <- nrow(ctd_unified)
+  
+  # Create condition to keep rows: all kicker/punter columns must be non-NA and non-blank
+  keep_condition <- TRUE
+  for (col in kicker_punter_cols_ctd) {
+    keep_condition <- keep_condition & !is.na(ctd_unified[[col]]) & ctd_unified[[col]] != "" & ctd_unified[[col]] != "NA"
+  }
+  
+  ctd_unified <- ctd_unified[keep_condition]
+  rows_after <- nrow(ctd_unified)
+  
+  cat("ctd_unified: Removed", rows_before - rows_after, "rows with NA/blank kicker or punter data\n")
+  cat("ctd_unified: Kicker/punter columns checked:", paste(kicker_punter_cols_ctd, collapse = ", "), "\n")
+} else {
+  cat("ctd_unified: No kicker or punter columns found\n")
+}
+
+# Filter CFD dataset
+kicker_punter_cols_cfd <- grep("^(kicker|punter)", names(cfd_unified), value = TRUE)
+
+if (length(kicker_punter_cols_cfd) > 0) {
+  rows_before <- nrow(cfd_unified)
+  
+  # Create condition to keep rows: all kicker/punter columns must be non-NA and non-blank
+  keep_condition <- TRUE
+  for (col in kicker_punter_cols_cfd) {
+    keep_condition <- keep_condition & !is.na(cfd_unified[[col]]) & cfd_unified[[col]] != "" & cfd_unified[[col]] != "NA"
+  }
+  
+  cfd_unified <- cfd_unified[keep_condition]
+  rows_after <- nrow(cfd_unified)
+  
+  cat("cfd_unified: Removed", rows_before - rows_after, "rows with NA/blank kicker or punter data\n")
+  cat("cfd_unified: Kicker/punter columns checked:", paste(kicker_punter_cols_cfd, collapse = ", "), "\n")
+} else {
+  cat("cfd_unified: No kicker or punter columns found\n")
+}
+
+# Updated function to create missing information indicators for ALL player positions
+# EXCEPT kicker_id and punter_id columns
+# create_missing_indicators <- function(dt) {
+#   # Get regular starter position columns
+#   starter_cols <- grep("^starter_(offense|defense)_[A-Z]+_[0-9]+$", names(dt), value = TRUE)
+#   
+#   # Get special teams columns (kicker and punter) - adapted to work with unified structure
+#   # But we'll filter these out since we don't want missing indicators for ID columns
+#   special_teams_cols <- grep("^(kicker_id|punter_id)_.*_12w$", names(dt), value = TRUE)
+#   
+#   # Get other special teams columns that are NOT kicker_id or punter_id
+#   other_special_teams_cols <- grep("^(kicker|punter)_(?!id).*_12w$", names(dt), value = TRUE, perl = TRUE)
+#   
+#   # Combine starter columns with non-ID special teams columns only
+#   all_player_cols <- c(starter_cols, other_special_teams_cols)
+#   
+#   cat("Creating missing indicators for", length(all_player_cols), "player columns:\n")
+#   cat("- Regular starter columns:", length(starter_cols), "\n")
+#   cat("- Special teams columns (excluding ID columns):", length(other_special_teams_cols), "\n")
+#   cat("- Excluded kicker/punter ID columns:", length(special_teams_cols), "\n")
+#   
+#   for(col in all_player_cols) {
+#     # Create missing indicator column name
+#     missing_col <- paste0("missing_information_", col)
+#     
+#     # Create binary indicator: 1 if NA/blank/or = to 0, 0 if has value
+#     dt[, (missing_col) := as.integer(is.na(get(col)) | get(col) == "" | get(col) == "NA")]
+#     #dt[, (missing_col) := as.integer(is.na(get(col)) | get(col) == "" | get(col) == "NA" | get(col) == 0)]
+#   }
+#   
+#   return(dt)
+# }
+# 
+# # Create v2 versions with missing indicators
+# cafd_unified_v2 <- create_missing_indicators(copy(cafd_unified))
+# cfd_unified_v2 <- create_missing_indicators(copy(cfd_unified))
+# ctd_unified_v2 <- create_missing_indicators(copy(ctd_unified))
+
+# Updated function to create missing information indicators for ALL player stat columns
+create_missing_indicators <- function(dt) {
+  # Get ALL columns ending with _12w (these are all player stat columns)
+  player_stat_cols <- grep("_12w$", names(dt), value = TRUE)
+  
+  cat("Creating missing indicators for", length(player_stat_cols), "player stat columns\n")
+  
+  for(col in player_stat_cols) {
+    # Create missing indicator column name
+    missing_col <- paste0("missing_information_", col)
+    
+    # Create binary indicator: 1 if NA/blank/or = 0, 0 if has value
+    dt[, (missing_col) := as.integer(is.na(get(col)) | get(col) == "" | get(col) == "NA" | get(col) == 0)]
+  }
+  
+  # Report summary
+  missing_cols_created <- grep("^missing_information_", names(dt), value = TRUE)
+  cat("Created", length(missing_cols_created), "missing information columns\n")
+  
+  return(dt)
+}
+
+# Create v2 versions with missing indicators
+cafd_unified_v2 <- create_missing_indicators(copy(cafd_unified))
+cfd_unified_v2 <- create_missing_indicators(copy(cfd_unified))
+ctd_unified_v2 <- create_missing_indicators(copy(ctd_unified))
+```
+
+```{r}
+# Create kp_investigation dataset with specified columns in logical order
+library(dplyr)
+
+# Select and reorder columns logically
+kp_investigation <- ctd_unified_v2 %>%
+  select(
+    # Game identifiers
+    game_id,
+    play_id,
+
+    # Game details
+    game_date,
+    week,
+    
+    # Teams and coaches
+    posteam,
+    defteam,
+    
+    # Play description
+    desc,
+    
+    # Kicker and punter information
+    kicker_id,
+    kicker_name,
+    kicker_id_field_goals_grades_grades_fgep_kicker_12w,
+    punter_id,
+    punter_name,
+    punter_id_punting_grades_grades_punter_12w,
+    
+  )
+
+# Write to CSV
+write.csv(kp_investigation, "kp_investigation.csv", row.names = FALSE)
+
+# Display summary
+cat("Created kp_investigation.csv with", nrow(kp_investigation), "rows and", ncol(kp_investigation), "columns\n")
+cat("Column order:\n")
+cat(paste(1:ncol(kp_investigation), names(kp_investigation), sep = ". ", collapse = "\n"))
+cat("\n\nFirst few rows:\n")
+print(head(kp_investigation, 3))
+```
+
+
+```{r}
+# Complete Step 3 Replacement - Process v2 to v3 with defensive formations (CAFD and CTD only, NOT CFD)
+
+# Function to add defense coverage encoding
+add_defense_coverage_encoding <- function(dt) {
+  if ("defense_coverage_type" %in% names(dt)) {
+    cat("  Processing defense_coverage_type column\n")
+    
+    # Get unique coverage types, excluding NA and blank
+    unique_coverages <- unique(dt$defense_coverage_type)
+    unique_coverages <- unique_coverages[!is.na(unique_coverages) & unique_coverages != "" & unique_coverages != "NA"]
+    
+    cat("    Found", length(unique_coverages), "unique coverage types\n")
+    
+    # Create one-hot columns for each coverage type
+    for (coverage in unique_coverages) {
+      clean_coverage <- gsub("[^A-Za-z0-9]", "_", coverage)
+      clean_coverage <- gsub("_+", "_", clean_coverage)
+      clean_coverage <- gsub("^_|_$", "", clean_coverage)
+      col_name <- paste0("defense_coverage_", clean_coverage)
+      
+      dt[, (col_name) := as.integer(defense_coverage_type == coverage & !is.na(defense_coverage_type))]
+    }
+    
+    # Create other/unknown column for NA or blank values
+    dt[, defense_coverage_other_unknown := as.integer(
+      is.na(defense_coverage_type) | defense_coverage_type == "" | defense_coverage_type == "NA"
+    )]
+    
+    cat("    Created", length(unique_coverages) + 1, "defense coverage columns (including other_unknown)\n")
+  }
+  return(dt)
+}
+
+# Function to parse defense personnel
+add_defense_personnel_parsing <- function(dt) {
+  if ("defense_personnel" %in% names(dt)) {
+    cat("  Processing defense_personnel column\n")
+    
+    # Initialize columns with 0
+    dt[, `:=`(
+      defense_personnel_DL = 0L,
+      defense_personnel_LB = 0L,
+      defense_personnel_DB = 0L,
+      defense_personnel_other_unknown = 0L
+    )]
+    
+    # First, mark all NA/blank as other_unknown
+    dt[is.na(defense_personnel) | defense_personnel == "" | defense_personnel == "NA", 
+       defense_personnel_other_unknown := 1L]
+    
+    # For non-blank values, extract numbers
+    # The format is typically "4 DL, 2 LB, 5 DB"
+    non_blank_rows <- which(dt$defense_personnel_other_unknown == 0)
+    
+    if (length(non_blank_rows) > 0) {
+      # Extract DL count
+      dl_matches <- regmatches(dt$defense_personnel[non_blank_rows], 
+                               regexpr("([0-9]+)\\s*DL", dt$defense_personnel[non_blank_rows]))
+      dt[non_blank_rows, defense_personnel_DL := as.integer(gsub("[^0-9]", "", dl_matches))]
+      
+      # Extract LB count
+      lb_matches <- regmatches(dt$defense_personnel[non_blank_rows], 
+                               regexpr("([0-9]+)\\s*LB", dt$defense_personnel[non_blank_rows]))
+      dt[non_blank_rows, defense_personnel_LB := as.integer(gsub("[^0-9]", "", lb_matches))]
+      
+      # Extract DB count
+      db_matches <- regmatches(dt$defense_personnel[non_blank_rows], 
+                               regexpr("([0-9]+)\\s*DB", dt$defense_personnel[non_blank_rows]))
+      dt[non_blank_rows, defense_personnel_DB := as.integer(gsub("[^0-9]", "", db_matches))]
+      
+      # If any parsing resulted in NA, mark as other_unknown
+      failed_parse <- non_blank_rows[is.na(dt$defense_personnel_DL[non_blank_rows]) | 
+                                      is.na(dt$defense_personnel_LB[non_blank_rows]) | 
+                                      is.na(dt$defense_personnel_DB[non_blank_rows])]
+      
+      if (length(failed_parse) > 0) {
+        dt[failed_parse, `:=`(
+          defense_personnel_DL = 0L,
+          defense_personnel_LB = 0L,
+          defense_personnel_DB = 0L,
+          defense_personnel_other_unknown = 1L
+        )]
+      }
+    }
+    
+    cat("    Created 4 defense personnel columns (DL, LB, DB, other_unknown)\n")
+  }
+  return(dt)
+}
+
+# Updated process_data_v3_from_env function
+process_data_v3_from_env <- function(data, dataset_name) {
+  
+  # Extract year from game_id and create year column
+  if("game_id" %in% names(data)) {
+    data[, year := as.integer(substr(game_id, 1, 4))]
+  }
+  
+  # DEFENSIVE FORMATIONS PROCESSING - ONLY FOR CTD AND CAFD (NOT CFD!)
+  if (grepl("ctd|cafd", dataset_name, ignore.case = TRUE)) {
+    cat("\nProcessing defensive formations for", dataset_name, "\n")
+    
+    # Add defense coverage encoding
+    data <- add_defense_coverage_encoding(data)
+    
+    # Add defense personnel parsing  
+    data <- add_defense_personnel_parsing(data)
+    
+    # Process defense_man_zone_type if it exists (similar to coverage type)
+    if ("defense_man_zone_type" %in% names(data)) {
+      cat("  Processing defense_man_zone_type column\n")
+      
+      unique_zones <- unique(data$defense_man_zone_type)
+      unique_zones <- unique_zones[!is.na(unique_zones) & unique_zones != "" & unique_zones != "NA"]
+      
+      for (zone in unique_zones) {
+        clean_zone <- gsub("[^A-Za-z0-9]", "_", zone)
+        clean_zone <- gsub("_+", "_", clean_zone)
+        clean_zone <- gsub("^_|_$", "", clean_zone)
+        col_name <- paste0("defense_manzone_", clean_zone)
+        
+        data[, (col_name) := as.integer(defense_man_zone_type == zone & !is.na(defense_man_zone_type))]
+      }
+      
+      data[, defense_manzone_other_unknown := as.integer(
+        is.na(defense_man_zone_type) | defense_man_zone_type == "" | defense_man_zone_type == "NA"
+      )]
+      
+      cat("    Created", length(unique_zones) + 1, "man/zone columns (including other_unknown)\n")
+    }
+  }
+  
+  # Core base columns
+  core_columns <- c(
+    "my_id",
+    "year",
+    "week",
+    
+    "home_coach",
+    "away_coach",
+    
+    "ydstogo",
+    "yardline_100",
+    "posteam_timeouts_remaining",
+    "defteam_timeouts_remaining",
+    "game_seconds_remaining",
+    "temp",
+    "wind",
+    "roof",
+    "vegas_wp",
+    "spread_line",
+    "total_line",
+    "prep_days",
+    "home_team",
+    "away_team",
+    "posteam",
+    
+    "score_diff",
+    "home_attendance",
+    "down1_pct",
+    "down2_pct", 
+    "down3_pct",
+    
+    "overall_win_pct",
+    "team_win_pct",
+    "prev_win_pct",
+    
+    "prev_shotgun_rate",
+    "prev_singleback_rate", 
+    "prev_empty_rate",
+    "prev_iform_rate",
+    
+    "prev_shotgun_success",
+    "prev_singleback_success",
+    "prev_empty_success", 
+    "prev_iform_success",
+    
+    "prev_stop_rate_run",
+    "prev_stop_rate_pass",
+    
+    "down1_conv_pct",
+    "down2_conv_pct",
+    "down3_conv_pct",
+    "down4_conv_pct",
+    "down4_attempt_pct",
+    "down4_attempt_pct_excl_2min",
+    
+    "attendance_q1",
+    "attendance_q2",
+    "attendance_q4",
+    "attendance_q5",
+    
+    "posteam_coach_age",
+    
+    "coach_experience",
+    "coach_tenure",
+    
+    "posteam_avg_age",
+    "defteam_avg_age",
+    
+    "fg_attempt_rate_30_50",
+    "cum_fourth_downs_30_50"
+  )
+  
+  # Add defensive formation columns for CTD/CAFD only (NOT CFD)
+  if (grepl("ctd|cafd", dataset_name, ignore.case = TRUE)) {
+    core_columns <- c(core_columns, 
+                      "defenders_in_box",
+                      "defense_personnel_DL",
+                      "defense_personnel_LB", 
+                      "defense_personnel_DB",
+                      "defense_personnel_other_unknown")
+    
+    # Also include all dynamically created defense_coverage_* and defense_manzone_* columns
+    defense_coverage_cols <- grep("^defense_coverage_", names(data), value = TRUE)
+    defense_manzone_cols <- grep("^defense_manzone_", names(data), value = TRUE)
+    core_columns <- c(core_columns, defense_coverage_cols, defense_manzone_cols)
+  }
+  
+  # Add kicker/punter columns if they exist
+  kicker_cols <- grep("^kicker_id_.*_12w$", names(data), value = TRUE)
+  punter_cols <- grep("^punter_id_.*_12w$", names(data), value = TRUE)
+  
+  if(length(kicker_cols) > 0) {
+    core_columns <- c(core_columns, kicker_cols)
+    cat("Added", length(kicker_cols), "kicker columns\n")
+  }
+  
+  if(length(punter_cols) > 0) {
+    core_columns <- c(core_columns, punter_cols)
+    cat("Added", length(punter_cols), "punter columns\n")
+  }
+  
+  # Conditionally add rush_attempt based on dataset type
+  if (grepl("cfd", dataset_name, ignore.case = TRUE)) {
+    cat("CFD dataset detected - excluding rush_attempt column\n")
+  } else {
+    core_columns <- c(core_columns, "rush_attempt")
+    cat("Non-CFD dataset detected - including rush_attempt column\n")
+  }
+  
+  # Target columns
+  target_columns <- c("attempt", "first_down", "converted")
+  
+  # Formation columns (only for non-CFD)
+  formation_columns <- c("offense_formation")
+  
+  # Get columns that actually exist
+  existing_core <- intersect(core_columns, names(data))
+  existing_targets <- intersect(target_columns, names(data))
+  existing_formations <- intersect(formation_columns, names(data))
+  
+  # Report missing columns
+  missing_core <- setdiff(core_columns, names(data))
+  missing_targets <- setdiff(target_columns, names(data))
+  missing_formations <- setdiff(formation_columns, names(data))
+  
+  cat("\n--- Missing Column Report for", dataset_name, "---\n")
+  if(length(missing_core) > 0) {
+    cat("Missing core columns:", paste(missing_core, collapse=", "), "\n")
+  } else {
+    cat("All core columns found\n")
+  }
+  
+  if(length(missing_targets) > 0) {
+    cat("Missing target columns:", paste(missing_targets, collapse=", "), "\n")
+  } else {
+    cat("All target columns found\n")
+  }
+  
+  if(length(missing_formations) > 0) {
+    cat("Missing formation columns:", paste(missing_formations, collapse=", "), "\n")
+  } else {
+    cat("All formation columns found\n")
+  }
+  cat("--- End Missing Column Report ---\n\n")
+  
+  # Get ALL player stat columns
+  player_stat_cols <- grep("_12w$", names(data), value = TRUE)
+  
+  # Get missing information columns
+  missing_info_cols <- grep("^missing_information_", names(data), value = TRUE)
+  
+  # Combine all columns
+  all_selected_cols <- c(
+    existing_targets,
+    existing_core,
+    existing_formations,
+    player_stat_cols,
+    missing_info_cols
+  )
+  
+  # Remove duplicates and select
+  final_cols <- unique(all_selected_cols)
+  final_cols <- intersect(final_cols, names(data))
+  
+  # IMPORTANT: Remove the original defense columns that we processed (for CTD/CAFD only)
+  if (grepl("ctd|cafd", dataset_name, ignore.case = TRUE)) {
+    cols_to_remove <- c("defense_coverage_type", "defense_personnel", "defense_man_zone_type")
+    final_cols <- setdiff(final_cols, cols_to_remove)
+  }
+  
+  data_v3 <- data[, ..final_cols]
+  
+  # Transform spread_line to posteam perspective (if posteam_type_home exists)
+  if("spread_line" %in% names(data_v3) && "posteam_type_home" %in% names(data)) {
+    data_v3$spread_line <- ifelse(data$posteam_type_home == 0, 
+                                 -data_v3$spread_line, 
+                                 data_v3$spread_line)
+  }
+  
+  cat("Processed", dataset_name, "-> Original columns:", ncol(data), "V3 columns:", ncol(data_v3), "\n")
+  
+  return(data_v3)
+}
+
+# Process all v2 datasets from environment and create v3 versions
+process_all_v2_to_v3 <- function() {
+  cat("Processing v2 datasets from environment to create v3 versions:\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n")  # Fixed the separator line
+  
+  # Process each dataset and assign to global environment with v3 names
+  cafd_unified_v3 <<- process_data_v3_from_env(cafd_unified_v2, "cafd_unified_v2")
+  cfd_unified_v3 <<- process_data_v3_from_env(cfd_unified_v2, "cfd_unified_v2")
+  ctd_unified_v3 <<- process_data_v3_from_env(ctd_unified_v2, "ctd_unified_v2")
+  
+  cat("\n", paste(rep("=", 60), collapse = ""), "\n")  # Fixed the separator line
+  cat("All V3 datasets created in environment:\n")
+  cat("- cafd_unified_v3:", nrow(cafd_unified_v3), "rows,", ncol(cafd_unified_v3), "columns\n")
+  cat("- cfd_unified_v3:", nrow(cfd_unified_v3), "rows,", ncol(cfd_unified_v3), "columns\n")
+  cat("- ctd_unified_v3:", nrow(ctd_unified_v3), "rows,", ncol(ctd_unified_v3), "columns\n")
+  
+  # Check defensive columns in CTD and CAFD (NOT CFD)
+  cat("\nDefensive columns check:\n")
+  
+  # CTD check
+  ctd_def_cols <- grep("^(defense_|defenders_in_box)", names(ctd_unified_v3), value = TRUE)
+  cat("CTD defensive columns:", length(ctd_def_cols), "\n")
+  if(length(ctd_def_cols) > 0) {
+    cat("  Sample:", head(ctd_def_cols, 10), "\n")
+  }
+  
+  # CAFD check
+  cafd_def_cols <- grep("^(defense_|defenders_in_box)", names(cafd_unified_v3), value = TRUE)
+  cat("CAFD defensive columns:", length(cafd_def_cols), "\n")
+  if(length(cafd_def_cols) > 0) {
+    cat("  Sample:", head(cafd_def_cols, 10), "\n")
+  }
+  
+  # CFD check (should have NO defensive columns)
+  cfd_def_cols <- grep("^(defense_|defenders_in_box)", names(cfd_unified_v3), value = TRUE)
+  cat("CFD defensive columns:", length(cfd_def_cols), " (should be 0)\n")
+  if(length(cfd_def_cols) > 0) {
+    cat("  WARNING: CFD has defensive columns when it shouldn't!\n")
+    cat("  Found:", cfd_def_cols, "\n")
+  }
+}
+
+# Run the processing
+process_all_v2_to_v3()
+```
+
+
+
+```{r}
+# Feature Engineering: Add squared terms and interaction terms
+
+add_features <- function(dt) {
+  
+  # Squared terms
+  dt[, ydstogo_squared := ydstogo^2]
+  dt[, temp_squared := ifelse(is.na(temp), 70^2, temp^2)]
+  #square score diff
+  dt[, score_diff_squared := score_diff^2]
+  
+  # try addinga. squared fg_attempt_rate_30_50 and interact it with kicker and punter grades
+  dt[, fg_attempt_rate_30_50_squared := fg_attempt_rate_30_50^2]
+  
+  # Kicker grade squared terms
+  kicker_grade_cols <- grep("^kicker_id_.*grades.*_12w$", names(dt), value = TRUE)
+  for(col in kicker_grade_cols) {
+    dt[, paste0(col, "_squared") := get(col)^2]
+  }
+  
+  # Punter grade squared terms  
+  punter_grade_cols <- grep("^punter_id_.*grades.*_12w$", names(dt), value = TRUE)
+  for(col in punter_grade_cols) {
+    dt[, paste0(col, "_squared") := get(col)^2]
+  }
+  
+  # Interaction terms
+  dt[, score_diff_x_seconds_remaining := score_diff * game_seconds_remaining]
+  dt[, ydstogo_x_yardline100 := ydstogo * yardline_100]
+  dt[, kicker_x_fg_attempt_rate := fg_attempt_rate_30_50  * kicker_id_field_goals_grades_grades_fgep_kicker_12w]
+dt[, punter_x_fg_attempt_rate := fg_attempt_rate_30_50  * punter_id_punting_grades_grades_punter_12w] 
+
+  return(dt)
+}
+
+# Apply to all datasets
+cafd_unified_v3 <- add_features(cafd_unified_v3)
+cfd_unified_v3 <- add_features(cfd_unified_v3)
+ctd_unified_v3 <- add_features(ctd_unified_v3)
+```
+
+```{r}
+# V4 Processing - Remove week 1, and remove target columns from specific datasets
+# Function to create v4 datasets from v3 datasets
+process_v3_to_v4 <- function() {
+ cat("Processing v3 datasets to create v4 versions:\n")
+ 
+ # Helper function to process a single dataset
+ process_single_v4 <- function(data_v3, dataset_name) {
+   cat("Processing", dataset_name, "to v4...\n")
+   
+   # Copy the data
+   data_v4 <- copy(data_v3)
+   
+   # Check if week column exists and remove week 1 observations
+   if ("week" %in% names(data_v4)) {
+     # First unscale week to get original values for filtering
+     if (!is.null(attr(data_v4$week, "scaled:center")) && !is.null(attr(data_v4$week, "scaled:scale"))) {
+       original_week <- as.numeric(data_v4$week) * attr(data_v4$week, "scaled:scale") + attr(data_v4$week, "scaled:center")
+       data_v4$week <- original_week
+     }
+     
+     # Remove week 1 observations
+     rows_before <- nrow(data_v4)
+     data_v4 <- data_v4[week != 1]
+     rows_after <- nrow(data_v4)
+     cat("  Removed", rows_before - rows_after, "week 1 observations\n")
+   }
+   
+   # For CFD datasets, remove converted and first_down columns
+   if (grepl("cfd", dataset_name, ignore.case = TRUE)) {
+     cols_to_remove <- intersect(c("converted", "first_down"), names(data_v4))
+     if (length(cols_to_remove) > 0) {
+       data_v4[, (cols_to_remove) := NULL]
+       cat("  Removed columns from CFD dataset:", paste(cols_to_remove, collapse=", "), "\n")
+     }
+   }
+   
+   # For CAFD datasets, remove attempt column
+   if (grepl("cafd", dataset_name, ignore.case = TRUE)) {
+     cols_to_remove <- intersect(c("attempt"), names(data_v4))
+     if (length(cols_to_remove) > 0) {
+       data_v4[, (cols_to_remove) := NULL]
+       cat("  Removed columns from CAFD dataset:", paste(cols_to_remove, collapse=", "), "\n")
+     }
+   }
+   
+   cat("  Final v4 columns:", ncol(data_v4), "rows:", nrow(data_v4), "\n")
+   return(data_v4)
+ }
+ 
+ # Process each v3 dataset and create v4 versions
+ cafd_unified_v4 <<- process_single_v4(cafd_unified_v3, "cafd_unified_v3")
+ cfd_unified_v4 <<- process_single_v4(cfd_unified_v3, "cfd_unified_v3")
+ ctd_unified_v4 <<- process_single_v4(ctd_unified_v3, "ctd_unified_v3")
+ 
+ cat("\nAll V4 datasets created in environment:\n")
+ cat("- cafd_unified_v4\n")
+ cat("- cfd_unified_v4\n")
+ cat("- ctd_unified_v4\n")
+}
+
+# Run the v4 processing
+process_v3_to_v4()
+```
+
+```{r}
+# V5 Processing - Handle missing weather data (wind NA -> 0, temp NA -> 70)
+# Function to create v5 datasets from v4 datasets
+process_v4_to_v5 <- function() {
+ cat("Processing v4 datasets to create v5 versions:\n")
+ 
+ # Helper function to process a single dataset
+ process_single_v5 <- function(data_v4, dataset_name) {
+   cat("Processing", dataset_name, "to v5...\n")
+   
+   # Copy the data
+   data_v5 <- copy(data_v4)
+   
+   # Handle wind NAs -> 0
+   if ("wind" %in% names(data_v5)) {
+     wind_nas <- sum(is.na(data_v5$wind))
+     if (wind_nas > 0) {
+       data_v5$wind[is.na(data_v5$wind)] <- 0
+       cat("  Replaced", wind_nas, "NA wind values with 0\n")
+     }
+   }
+   
+   # Handle temp NAs -> 70
+   if ("temp" %in% names(data_v5)) {
+     temp_nas <- sum(is.na(data_v5$temp))
+     if (temp_nas > 0) {
+       data_v5$temp[is.na(data_v5$temp)] <- 70
+       cat("  Replaced", temp_nas, "NA temp values with 70\n")
+     }
+   }
+   
+   cat("  Final v5 columns:", ncol(data_v5), "rows:", nrow(data_v5), "\n")
+   return(data_v5)
+ }
+ 
+ # Process each v4 dataset and create v5 versions
+ cafd_unified_v5 <<- process_single_v5(cafd_unified_v4, "cafd_unified_v4")
+ cfd_unified_v5 <<- process_single_v5(cfd_unified_v4, "cfd_unified_v4")
+ ctd_unified_v5 <<- process_single_v5(ctd_unified_v4, "ctd_unified_v4")
+ 
+ cat("\nAll V5 datasets created in environment:\n")
+ cat("- cafd_unified_v5\n")
+ cat("- cfd_unified_v5\n")
+ cat("- ctd_unified_v5\n")
+}
+
+# Run the v5 processing
+process_v4_to_v5()
+```
+
+```{r}
+# V6 Processing - Set all NA values in player columns to 0
+# Function to create v6 datasets from v5 datasets
+process_v5_to_v6 <- function() {
+ cat("Processing v5 datasets to create v6 versions:\n")
+ 
+ # Helper function to process a single dataset
+ process_single_v6 <- function(data_v5, dataset_name) {
+   cat("Processing", dataset_name, "to v6...\n")
+   
+   # Copy the data
+   data_v6 <- copy(data_v5)
+   
+   # Get all player stat columns (anything with _12w at the end)
+   player_stat_cols <- grep("_12w$", names(data_v6), value = TRUE)
+   
+   if (length(player_stat_cols) > 0) {
+     total_nas_replaced <- 0
+     
+     for (col in player_stat_cols) {
+       col_nas <- sum(is.na(data_v6[[col]]))
+       if (col_nas > 0) {
+         data_v6[is.na(get(col)), (col) := 0]
+         total_nas_replaced <- total_nas_replaced + col_nas
+       }
+     }
+     
+     cat("  Replaced", total_nas_replaced, "NA values with 0 across", length(player_stat_cols), "player columns\n")
+   } else {
+     cat("  No player columns found (ending with _12w)\n")
+   }
+   
+   cat("  Final v6 columns:", ncol(data_v6), "rows:", nrow(data_v6), "\n")
+   return(data_v6)
+ }
+ 
+ # Process each v5 dataset and create v6 versions
+ cafd_unified_v6 <<- process_single_v6(cafd_unified_v5, "cafd_unified_v5")
+ cfd_unified_v6 <<- process_single_v6(cfd_unified_v5, "cfd_unified_v5")
+ ctd_unified_v6 <<- process_single_v6(ctd_unified_v5, "ctd_unified_v5")
+ 
+ cat("\nAll V6 datasets created in environment:\n")
+ cat("- cafd_unified_v6\n")
+ cat("- cfd_unified_v6\n")
+ cat("- ctd_unified_v6\n")
+}
+
+# Run the v6 processing
+process_v5_to_v6()
+```
+
+```{r}
+# V7 Processing - Remove all rows where year = 2017
+# Function to create v7 datasets from v6 datasets
+process_v6_to_v7 <- function() {
+ cat("Processing v6 datasets to create v7 versions:\n")
+ 
+ # Helper function to process a single dataset
+ process_single_v7 <- function(data_v6, dataset_name) {
+   cat("Processing", dataset_name, "to v7...\n")
+   
+   # Copy the data
+   data_v7 <- copy(data_v6)
+   
+   # Check if year column exists and remove year 2017 observations
+   if ("year" %in% names(data_v7)) {
+     rows_before <- nrow(data_v7)
+     data_v7 <- data_v7#[year != 2017]
+     rows_after <- nrow(data_v7)
+     rows_removed <- rows_before - rows_after
+     cat("  Removed", rows_removed, "rows with year = 2017\n")
+   } else {
+     cat("  No 'year' column found - no filtering applied\n")
+   }
+   
+   cat("  Final v7 columns:", ncol(data_v7), "rows:", nrow(data_v7), "\n")
+   return(data_v7)
+ }
+ 
+ # Process each v6 dataset and create v7 versions
+ cafd_unified_v7 <<- process_single_v7(cafd_unified_v6, "cafd_unified_v6")
+ cfd_unified_v7 <<- process_single_v7(cfd_unified_v6, "cfd_unified_v6")
+ ctd_unified_v7 <<- process_single_v7(ctd_unified_v6, "ctd_unified_v6")
+ 
+ cat("\nAll V7 datasets created in environment:\n")
+ cat("- cafd_unified_v7\n")
+ cat("- cfd_unified_v7\n")
+ cat("- ctd_unified_v7\n")
+}
+
+# Run the v7 processing
+process_v6_to_v7()
+```
+
+```{r}
+# NA Analysis for v7 datasets
+analyze_nas_v7 <- function() {
+ cat("=== NA Analysis for v7 Datasets ===\n\n")
+ 
+ # List of all v7 datasets
+ v7_datasets <- list(
+   "cafd_unified_v7" = cafd_unified_v7,
+   "cfd_unified_v7" = cfd_unified_v7,
+   "ctd_unified_v7" = ctd_unified_v7
+ )
+ 
+ # Analyze each dataset
+ for (dataset_name in names(v7_datasets)) {
+   data <- v7_datasets[[dataset_name]]
+   cat("--- ", dataset_name, " ---\n")
+   
+   # Find columns with NAs
+   na_counts <- sapply(data, function(x) sum(is.na(x)))
+   cols_with_nas <- na_counts[na_counts > 0]
+   
+   if (length(cols_with_nas) == 0) {
+     cat("No columns with NA values\n")
+   } else {
+     cat("Columns with NAs:\n")
+     for (col_name in names(cols_with_nas)) {
+       cat("  ", col_name, ": ", cols_with_nas[col_name], " NAs\n")
+     }
+     cat("Total columns with NAs: ", length(cols_with_nas), "\n")
+     cat("Total NA values: ", sum(cols_with_nas), "\n")
+   }
+   cat("\n")
+ }
+}
+
+# Run the NA analysis
+analyze_nas_v7()
+```
+
+```{r}
+# V8 Processing - CFD offense formations removal, posteam coach, one-hot encoding
+# UPDATED to skip already-processed defense columns
+process_v7_to_v8 <- function() {
+  cat("Processing v7 datasets to create v8 versions:\n")
+  
+  # Helper function to process a single dataset
+  process_single_v8 <- function(data_v7, dataset_name) {
+    cat("Processing", dataset_name, "to v8...\n")
+    
+    # Copy the data
+    data_v8 <- copy(data_v7)
+    
+    # 1. Handle offense_formation column
+    if ("offense_formation" %in% names(data_v8)) {
+      if (grepl("cfd", dataset_name, ignore.case = TRUE)) {
+        # For CFD datasets: remove the column
+        data_v8[, offense_formation := NULL]
+        cat("  Removed offense_formation column from CFD dataset\n")
+      } else {
+        # For non-CFD datasets (CAFD, CTD): one-hot encode
+        unique_formations <- unique(data_v8$offense_formation)
+        unique_formations <- unique_formations[!is.na(unique_formations) & unique_formations != ""]
+        
+        cat("  Creating one-hot encoding for", length(unique_formations), "offensive formations\n")
+        
+        # Create one-hot columns for formations
+        for (formation in unique_formations) {
+          # Clean formation name for column name
+          clean_formation <- gsub("[^A-Za-z0-9]", "_", formation)
+          clean_formation <- gsub("_+", "_", clean_formation)
+          clean_formation <- gsub("^_|_$", "", clean_formation)
+          col_name <- paste0("formation_", clean_formation)
+          
+          # Create binary indicator
+          data_v8[, (col_name) := as.integer(offense_formation == formation)]
+        }
+        
+        # Remove original offense_formation column after encoding
+        data_v8[, offense_formation := NULL]
+        cat("  Removed original offense_formation column after encoding\n")
+      }
+    }
+    
+    # 2. Create posteam_coach column
+    if ("home_coach" %in% names(data_v8) && "away_coach" %in% names(data_v8) && 
+        "posteam" %in% names(data_v8) && "home_team" %in% names(data_v8)) {
+      
+      # Create is_home_team indicator first
+      data_v8[, is_home_team := as.integer(posteam == home_team)]
+      
+      # Create posteam_coach
+      data_v8[, posteam_coach := ifelse(is_home_team == 1, home_coach, away_coach)]
+      
+      cat("  Created posteam_coach and is_home_team columns\n")
+    } else {
+      cat("  Warning: Cannot create posteam_coach - missing required columns\n")
+    }
+    
+    # 3. One-hot encode posteam coaches
+    if ("posteam_coach" %in% names(data_v8)) {
+      # Get unique coaches
+      unique_coaches <- unique(data_v8$posteam_coach)
+      unique_coaches <- unique_coaches[!is.na(unique_coaches)]
+      
+      cat("  Creating one-hot encoding for", length(unique_coaches), "coaches\n")
+      
+      # Create one-hot columns for coaches
+      for (coach in unique_coaches) {
+        # Clean coach name for column name (remove spaces, special chars)
+        clean_coach <- gsub("[^A-Za-z0-9]", "_", coach)
+        clean_coach <- gsub("_+", "_", clean_coach)
+        clean_coach <- gsub("^_|_$", "", clean_coach)
+        col_name <- paste0("coach_", clean_coach)
+        
+        # Create binary indicator
+        data_v8[, (col_name) := as.integer(posteam_coach == coach)]
+      }
+      
+      # Remove original posteam_coach column after encoding
+      data_v8[, posteam_coach := NULL]
+      cat("  Removed original posteam_coach column after encoding\n")
+    }
+    
+    # 4. One-hot encode years
+    if ("year" %in% names(data_v8)) {
+      unique_years <- unique(data_v8$year)
+      unique_years <- unique_years[!is.na(unique_years)]
+      
+      cat("  Creating one-hot encoding for", length(unique_years), "years\n")
+      
+      # Create one-hot columns for years
+      for (yr in unique_years) {
+        col_name <- paste0("year_", yr)
+        data_v8[, (col_name) := as.integer(year == yr)]
+      }
+      
+      # Remove original year column after encoding
+      data_v8[, year := NULL]
+      cat("  Removed original year column after encoding\n")
+    }
+    
+    # 5. One-hot encode roof
+    if ("roof" %in% names(data_v8)) {
+      unique_roofs <- unique(data_v8$roof)
+      unique_roofs <- unique_roofs[!is.na(unique_roofs) & unique_roofs != ""]
+      
+      cat("  Creating one-hot encoding for", length(unique_roofs), "roof types\n")
+      
+      # Create one-hot columns for roof types
+      for (roof_type in unique_roofs) {
+        # Clean roof type for column name
+        clean_roof <- gsub("[^A-Za-z0-9]", "_", roof_type)
+        clean_roof <- gsub("_+", "_", clean_roof)
+        clean_roof <- gsub("^_|_$", "", clean_roof)
+        col_name <- paste0("roof_", clean_roof)
+        
+        # Create binary indicator
+        data_v8[, (col_name) := as.integer(roof == roof_type)]
+      }
+      
+      # Remove original roof column after encoding
+      data_v8[, roof := NULL]
+      cat("  Removed original roof column after encoding\n")
+    }
+    
+    # 6. Transform game_seconds_remaining into is_first_half and seconds_remaining_in_half
+    if ("game_seconds_remaining" %in% names(data_v8)) {
+      # Create is_first_half (1 if > 1800 seconds, 0 if <= 1800)
+      data_v8[, is_first_half := as.integer(game_seconds_remaining > 1800)]
+      
+      # Create seconds_remaining_in_half
+      data_v8[, seconds_remaining_in_half := ifelse(
+        game_seconds_remaining > 1800,
+        game_seconds_remaining - 1800,  # First half: subtract 1800 to get seconds left in first half
+        game_seconds_remaining          # Second half: use as is
+      )]
+      
+      # Remove original game_seconds_remaining column after transformation
+      data_v8[, game_seconds_remaining := NULL]
+      cat("  Created is_first_half and seconds_remaining_in_half from game_seconds_remaining\n")
+      cat("  Removed original game_seconds_remaining column\n")
+    }
+    
+    # 7. Remove original columns that were used for creating features
+    # NOTE: We're being more careful here to only remove columns we actually processed
+    cols_to_remove <- c("home_team", "away_team", "posteam", "home_coach", "away_coach")
+    
+    # Check which columns actually exist before trying to remove them
+    existing_cols_to_remove <- intersect(cols_to_remove, names(data_v8))
+    
+    if (length(existing_cols_to_remove) > 0) {
+      data_v8[, (existing_cols_to_remove) := NULL]
+      cat("  Removed original columns:", paste(existing_cols_to_remove, collapse=", "), "\n")
+    }
+    
+    # Report on defense columns (should already be processed from v3)
+    defense_cols <- grep("^(defense_|defenders_in_box)", names(data_v8), value = TRUE)
+    if (length(defense_cols) > 0) {
+      cat("  NOTE: Found", length(defense_cols), "already-processed defense columns (not modified)\n")
+    }
+    
+    cat("  Final v8 columns:", ncol(data_v8), "rows:", nrow(data_v8), "\n")
+    return(data_v8)
+  }
+  
+  # Process each v7 dataset and create v8 versions
+  cafd_unified_v8 <<- process_single_v8(cafd_unified_v7, "cafd_unified_v7")
+  cfd_unified_v8 <<- process_single_v8(cfd_unified_v7, "cfd_unified_v7")
+  ctd_unified_v8 <<- process_single_v8(ctd_unified_v7, "ctd_unified_v7")
+  
+  cat("\nAll V8 datasets created in environment:\n")
+  cat("- cafd_unified_v8\n")
+  cat("- cfd_unified_v8\n")
+  cat("- ctd_unified_v8\n")
+}
+
+# Run the v8 processing
+process_v7_to_v8()
+
+# Optional: Check the new columns created
+check_v8_columns <- function() {
+  cat("\n=== V8 Columns Check ===\n")
+  
+  # Check one dataset as example
+  if (exists("ctd_unified_v8")) {
+    data <- ctd_unified_v8
+    
+    # Check coach columns
+    coach_cols <- grep("^coach_", names(data), value = TRUE)
+    cat("Coach columns created:", length(coach_cols), "\n")
+    
+    # Check year columns
+    year_cols <- grep("^year_", names(data), value = TRUE)
+    cat("Year columns created:", length(year_cols), "\n")
+    
+    # Check formation columns (should exist for CTD)
+    formation_cols <- grep("^formation_", names(data), value = TRUE)
+    cat("Formation columns created:", length(formation_cols), "\n")
+    
+    # Check defense columns (should be preserved from v3)
+    defense_cols <- grep("^defense_", names(data), value = TRUE)
+    cat("Defense columns preserved:", length(defense_cols), "\n")
+    if (length(defense_cols) > 0) {
+      cat("  Types: personnel:", sum(grepl("personnel", defense_cols)),
+          "| coverage:", sum(grepl("coverage", defense_cols)),
+          "| manzone:", sum(grepl("manzone", defense_cols)), "\n")
+    }
+    
+    # Check if defenders_in_box is preserved
+    if ("defenders_in_box" %in% names(data)) {
+      cat("defenders_in_box column: PRESERVED\n")
+    }
+    
+    # Check if is_home_team exists
+    if ("is_home_team" %in% names(data)) {
+      cat("is_home_team column created\n")
+    }
+    
+    # Check roof columns
+    roof_cols <- grep("^roof_", names(data), value = TRUE)
+    cat("Roof columns created:", length(roof_cols), "\n")
+    
+    # Check time columns
+    if ("is_first_half" %in% names(data) && "seconds_remaining_in_half" %in% names(data)) {
+      cat("Time transformation: is_first_half and seconds_remaining_in_half created\n")
+    }
+  }
+}
+
+# Run the column check
+check_v8_columns()
+```
+
+```{r}
+# Add yardline_100 polynomial terms and kicker interactions
+add_yardline_polynomials_and_kicker_interactions <- function(dt, dataset_name) {
+  cat("Adding yardline_100 polynomial terms and kicker interactions to", dataset_name, "...\n")
+  
+  # Remove any existing yardline polynomial columns first
+  existing_yardline_poly <- grep("yardline_100_(squared|cubed)", names(dt), value = TRUE)
+  if (length(existing_yardline_poly) > 0) {
+    dt[, (existing_yardline_poly) := NULL]
+    cat("  Removed existing yardline polynomial columns:", paste(existing_yardline_poly, collapse = ", "), "\n")
+  }
+  
+  # 1. Create yardline_100 polynomial terms
+  if ("yardline_100" %in% names(dt)) {
+    dt[, yardline_100_squared := yardline_100^2]
+    dt[, yardline_100_cubed := yardline_100^3]
+    cat("  Created yardline_100_squared and yardline_100_cubed\n")
+  }
+  
+  # 2. Find kicker grade columns and create interaction terms
+  kicker_grade_cols <- grep("^kicker_id_.*grades.*_12w$", names(dt), value = TRUE)
+  
+  if (length(kicker_grade_cols) > 0) {
+    cat("  Found", length(kicker_grade_cols), "kicker grade columns\n")
+    
+    # Use the first kicker grade column for all interactions
+    primary_kicker_col <- kicker_grade_cols[1]
+    cat("  Using", primary_kicker_col, "for interactions\n")
+    
+    # Create all three interaction terms
+    if ("yardline_100" %in% names(dt)) {
+      dt[, yardline_100_x_kicker := yardline_100 * get(primary_kicker_col)]
+      cat("  Created yardline_100_x_kicker\n")
+    }
+    
+    if ("yardline_100_squared" %in% names(dt)) {
+      dt[, yardline_100_squared_x_kicker := yardline_100_squared * get(primary_kicker_col)]
+      cat("  Created yardline_100_squared_x_kicker\n")
+    }
+    
+    if ("yardline_100_cubed" %in% names(dt)) {
+      dt[, yardline_100_cubed_x_kicker := yardline_100_cubed * get(primary_kicker_col)]
+      cat("  Created yardline_100_cubed_x_kicker\n")
+    }
+    
+  } else {
+    cat("  No kicker grade columns found\n")
+  }
+  
+  return(dt)
+}
+
+# Apply to all v8 datasets
+cat("=== Adding Yardline Polynomial Terms and Kicker Interactions ===\n")
+cafd_unified_v8 <- add_yardline_polynomials_and_kicker_interactions(cafd_unified_v8, "cafd_unified_v8")
+cfd_unified_v8 <- add_yardline_polynomials_and_kicker_interactions(cfd_unified_v8, "cfd_unified_v8")
+ctd_unified_v8 <- add_yardline_polynomials_and_kicker_interactions(ctd_unified_v8, "ctd_unified_v8")
+
+cat("\nFinal column counts after adding yardline polynomials and kicker interactions:\n")
+cat("- cafd_unified_v8:", ncol(cafd_unified_v8), "columns\n")
+cat("- cfd_unified_v8:", ncol(cfd_unified_v8), "columns\n")
+cat("- ctd_unified_v8:", ncol(ctd_unified_v8), "columns\n")
+
+# Check what new columns were created
+if (exists("cafd_unified_v8")) {
+  yardline_cols <- grep("yardline_100_(squared|cubed)", names(cafd_unified_v8), value = TRUE)
+  interaction_cols <- grep("yardline_100.*_x_kicker", names(cafd_unified_v8), value = TRUE)
+  
+  cat("\nNew polynomial columns:", paste(yardline_cols, collapse = ", "), "\n")
+  cat("New interaction columns:", paste(interaction_cols, collapse = ", "), "\n")
+  cat("Total new columns:", length(yardline_cols) + length(interaction_cols), "\n")
+}
+```
+
+```{r}
+# # Remove rows where kicker_id_field_goals_grades_grades_fgep_kicker_12w equals 0
+# remove_zero_kicker_rows <- function(dt, dataset_name) {
+#   kicker_col <- "kicker_id_field_goals_grades_grades_fgep_kicker_12w"
+#   
+#   if (kicker_col %in% names(dt)) {
+#     rows_before <- nrow(dt)
+#     
+#     # Remove rows where the kicker column equals 0
+#     dt <- dt[get(kicker_col) != 0]
+#     
+#     rows_after <- nrow(dt)
+#     rows_removed <- rows_before - rows_after
+#     
+#     cat("Removed", rows_removed, "rows with", kicker_col, "= 0 from", dataset_name, "\n")
+#     cat("Rows before:", rows_before, "| Rows after:", rows_after, "\n")
+#     
+#   } else {
+#     cat("Column", kicker_col, "not found in", dataset_name, "\n")
+#   }
+#   
+#   return(dt)
+# }
+# 
+# # Apply to all v8 datasets
+# cat("=== Removing Rows with Zero Kicker Grades from V8 Datasets ===\n")
+# cafd_unified_v8 <- remove_zero_kicker_rows(cafd_unified_v8, "cafd_unified_v8")
+# cfd_unified_v8 <- remove_zero_kicker_rows(cfd_unified_v8, "cfd_unified_v8")
+# ctd_unified_v8 <- remove_zero_kicker_rows(ctd_unified_v8, "ctd_unified_v8")
+# 
+# cat("\nFinal row and column counts after removing zero kicker grade rows:\n")
+# cat("- cafd_unified_v8:", nrow(cafd_unified_v8), "rows,", ncol(cafd_unified_v8), "columns\n")
+# cat("- cfd_unified_v8:", nrow(cfd_unified_v8), "rows,", ncol(cfd_unified_v8), "columns\n")
+# cat("- ctd_unified_v8:", nrow(ctd_unified_v8), "rows,", ncol(ctd_unified_v8), "columns\n")
+```
+
+
+```{r}
+# Handle defenders_in_box NAs in v8 data (CAFD and CTD only)
+handle_defenders_box_nas <- function() {
+  cat("\n=== Handling defenders_in_box NAs in v8 datasets ===\n")
+  
+  # Process CAFD
+  if ("defenders_in_box" %in% names(cafd_unified_v8)) {
+    # Count NAs before
+    nas_before <- sum(is.na(cafd_unified_v8$defenders_in_box))
+    
+    # Create binary indicator for NA values
+    cafd_unified_v8[, defenders_in_box_was_na := as.integer(is.na(defenders_in_box))]
+    
+    # Replace NAs with 0
+    cafd_unified_v8[is.na(defenders_in_box), defenders_in_box := 0]
+    
+    cat("CAFD: Replaced", nas_before, "NA values with 0 in defenders_in_box\n")
+    cat("      Created defenders_in_box_was_na indicator column\n")
+    
+    # Update global
+    cafd_unified_v8 <<- cafd_unified_v8
+  }
+  
+  # Process CTD
+  if ("defenders_in_box" %in% names(ctd_unified_v8)) {
+    # Count NAs before
+    nas_before <- sum(is.na(ctd_unified_v8$defenders_in_box))
+    
+    # Create binary indicator for NA values
+    ctd_unified_v8[, defenders_in_box_was_na := as.integer(is.na(defenders_in_box))]
+    
+    # Replace NAs with 0
+    ctd_unified_v8[is.na(defenders_in_box), defenders_in_box := 0]
+    
+    cat("CTD: Replaced", nas_before, "NA values with 0 in defenders_in_box\n")
+    cat("     Created defenders_in_box_was_na indicator column\n")
+    
+    # Update global
+    ctd_unified_v8 <<- ctd_unified_v8
+  }
+  
+  cat("\nFinal check - defenders_in_box NAs remaining:\n")
+  cat("- CAFD:", sum(is.na(cafd_unified_v8$defenders_in_box)), "\n")
+  cat("- CTD:", sum(is.na(ctd_unified_v8$defenders_in_box)), "\n")
+  cat("- CFD: Not modified (no defenders_in_box column)\n")
+}
+
+# Run it
+handle_defenders_box_nas()
+```
+
+
+```{r}
+# Write all v8 datasets as normal CSVs
+fwrite(cafd_unified_v8, "outcome_offense_defense.csv")
+fwrite(cfd_unified_v8, "selection_offense_defense.csv")
+fwrite(ctd_unified_v8, "third_down_offense_defense.csv")
+
+cat("All v8 unified datasets written as CSV files\n")
+```
+
+```{r}
+# # Create year subsets of CFD without player columns and missing information columns
+# # First, identify player columns (anything with _12w at the end)
+# player_cols <- grep("_12w$", names(cfd_unified_v8), value = TRUE)
+# 
+# # Identify missing information columns (anything starting with missing_information_)
+# missing_info_cols <- grep("^missing_information_", names(cfd_unified_v8), value = TRUE)
+# 
+# # Get columns to remove (player + missing info)
+# cols_to_remove <- c(player_cols, missing_info_cols)
+# 
+# # Get non-player, non-missing-info columns
+# keep_cols <- setdiff(names(cfd_unified_v8), cols_to_remove)
+# 
+# # Create subsets for each year without player columns and missing info columns
+# cfd_attendance_2019 <- cfd_unified_v8[year_2019 == 1, ..keep_cols]
+# cfd_attendance_2020 <- cfd_unified_v8[year_2020 == 1, ..keep_cols]
+# cfd_attendance_2021 <- cfd_unified_v8[year_2021 == 1, ..keep_cols]
+# 
+# # Function to remove zero variance columns and all year columns
+# remove_zero_variance_and_year_cols <- function(dt) {
+#   # Remove all year columns
+#   year_cols <- grep("^year_", names(dt), value = TRUE)
+#   if(length(year_cols) > 0) {
+#     dt[, (year_cols) := NULL]
+#     cat("  Removed", length(year_cols), "year columns\n")
+#   }
+#   
+#   # Calculate variance for numeric columns
+#   numeric_cols <- names(dt)[sapply(dt, is.numeric)]
+#   zero_var_cols <- c()
+#   
+#   for(col in numeric_cols) {
+#     if(var(dt[[col]], na.rm = TRUE) == 0) {
+#       zero_var_cols <- c(zero_var_cols, col)
+#     }
+#   }
+#   
+#   # Remove zero variance columns
+#   if(length(zero_var_cols) > 0) {
+#     dt[, (zero_var_cols) := NULL]
+#     cat("  Removed", length(zero_var_cols), "zero variance columns:", paste(zero_var_cols, collapse = ", "), "\n")
+#   } else {
+#     cat("  No zero variance columns found\n")
+#   }
+#   
+#   return(dt)
+# }
+# 
+# # Apply filtering to each dataset
+# cat("Filtering cfd_attendance_2019:\n")
+# cfd_attendance_2019 <- remove_zero_variance_and_year_cols(cfd_attendance_2019)
+# 
+# cat("Filtering cfd_attendance_2020:\n")
+# cfd_attendance_2020 <- remove_zero_variance_and_year_cols(cfd_attendance_2020)
+# 
+# cat("Filtering cfd_attendance_2021:\n")
+# cfd_attendance_2021 <- remove_zero_variance_and_year_cols(cfd_attendance_2021)
+# 
+# cat("\nFinal year subsets:\n")
+# cat("- cfd_attendance_2019:", nrow(cfd_attendance_2019), "rows,", ncol(cfd_attendance_2019), "columns\n")
+# cat("- cfd_attendance_2020:", nrow(cfd_attendance_2020), "rows,", ncol(cfd_attendance_2020), "columns\n")
+# cat("- cfd_attendance_2021:", nrow(cfd_attendance_2021), "rows,", ncol(cfd_attendance_2021), "columns\n")
+# cat("Player columns removed:", length(player_cols), "\n")
+# cat("Missing information columns removed:", length(missing_info_cols), "\n")
+# 
+# # Write to CSVs
+# fwrite(cfd_attendance_2019, "cfd_attendance_2019.csv")
+# fwrite(cfd_attendance_2020, "cfd_attendance_2020.csv")
+# fwrite(cfd_attendance_2021, "cfd_attendance_2021.csv")
+# 
+# cat("\nAll attendance year subsets written to CSV files\n")
+```
+

@@ -1,0 +1,125 @@
+---
+title: "depth_chart"
+output: html_document
+date: "2025-02-28"
+---
+
+```{r}
+# You already have nflverse loaded, which includes nflreadr
+# But let's make sure we specifically load nflreadr
+library(nflreadr)
+
+# Try to load the depth charts data using the correct function
+depth_charts <- load_depth_charts(2016:2023)
+str(depth_charts)
+```
+
+
+```{r}
+# Simple analysis of position and depth_position columns
+library(dplyr)
+
+# Get unique positions and their counts
+position_counts <- depth_charts %>%
+  count(position, sort = TRUE)
+
+print("POSITION COUNTS:")
+print(position_counts)
+
+# Get unique depth positions and their counts  
+depth_position_counts <- depth_charts %>%
+  count(depth_position, sort = TRUE)
+
+print("DEPTH POSITION COUNTS:")
+print(depth_position_counts)
+
+# Summary info
+cat("\nNumber of unique positions:", nrow(position_counts))
+cat("\nNumber of unique depth positions:", nrow(depth_position_counts))
+```
+
+```{r}
+# Position analysis by year (wide format)
+library(dplyr)
+library(tidyr)
+
+# Get position counts by year in wide format
+position_by_year <- depth_charts %>%
+  count(position, season) %>%
+  pivot_wider(names_from = season, values_from = n, values_fill = 0) %>%
+  arrange(desc(rowSums(select(., -position))))
+
+print("POSITION COUNTS BY YEAR (WIDE FORMAT):")
+print(position_by_year)
+
+# Get unique depth positions and their counts  
+depth_position_counts <- depth_charts %>%
+  count(depth_position, sort = TRUE)
+
+print("DEPTH POSITION COUNTS:")
+print(depth_position_counts)
+```
+
+
+```{r}
+# Position analysis by year (wide format)
+library(dplyr)
+library(tidyr)
+
+# Get position counts by year in wide format
+position_by_year <- depth_charts %>%
+  count(position, season) %>%
+  pivot_wider(names_from = season, values_from = n, values_fill = 0) %>%
+  arrange(desc(rowSums(select(., -position))))
+
+print("POSITION COUNTS BY YEAR (WIDE FORMAT):")
+print(position_by_year)
+
+# Get unique depth positions and their counts  
+depth_position_counts <- depth_charts %>%
+  count(depth_position, sort = TRUE)
+
+print("DEPTH POSITION COUNTS:")
+print(depth_position_counts)
+
+# Average positions per team (rounded up)
+avg_positions_per_team <- depth_charts %>%
+  group_by(position, season, club_code, week) %>%
+  summarise(players_per_team_week = n(), .groups = 'drop') %>%
+  group_by(position) %>%
+  summarise(avg_per_team = ceiling(mean(players_per_team_week)), .groups = 'drop') %>%
+  arrange(desc(avg_per_team))
+
+print("AVERAGE POSITIONS PER TEAM (ROUNDED UP):")
+print(avg_positions_per_team)
+
+# Write to CSV
+write.csv(avg_positions_per_team, "avg_positions_per_team.csv", row.names = FALSE)
+cat("\nData written to avg_positions_per_team.csv")
+```
+
+
+```{r}
+# Simple function to get P and K positions for a specific team, week, and season
+get_team_depth_chart <- function(depth_charts_df, year, week_num, team_abbrev) {
+  
+  result <- depth_charts_df %>%
+    filter(season == year) %>%
+    filter(week == week_num) %>%
+    filter(club_code == team_abbrev) 
+ # %>% filter(position %in% c("P", "K"))
+  
+  return(result)
+}
+
+# Example usage:
+# lv_week8_2022 <- get_team_depth_chart(depth_charts, 2022, 8, "LV")
+```
+
+
+```{r}
+df <- get_team_depth_chart(depth_charts, 2023, 13, "LA")
+
+```
+
+

@@ -1,0 +1,217 @@
+---
+title: "pff_names"
+output: html_document
+date: "2024-12-18"
+---
+
+fread the cleaned data
+```{r}
+library(data.table)
+cpff_stats <- fread("cpff_stats.csv.gz")
+```
+
+get only the following collums 
+
+year, week, player, position, team_name, player_id using dpylr
+
+```{r}
+# List the actual position columns (not including numeric fields)
+actual_position_cols <- c(
+  "blocking_grades_position",
+  "run_blocking_position", 
+  "pass_blocking_position",
+  "coverage_grades_position",
+  "coverage_schemes_position",
+  "defensive_grades_position",
+  "pass_rush_grades_position",
+  "pass_rushing_productivity_position",
+  "run_defense_grades_position",
+  "slot_coverage_position",
+  "allowed_pressure_position",
+  "passing_concept_position",
+  "passing_depth_position",
+  "passing_grades_position",
+  "passing_pressure_position",
+  "time_in_pocket_position",
+  "receiving_concept_position",
+  "receiving_depth_position",
+  "receiving_grades_position",
+  "receiving_vs_scheme_position",
+  "rushing_grades_position",
+  "field_goals_grades_position",
+  "kickoff_and_punt_return_grades_position",
+  "kickoff_grades_position",
+  "punting_grades_position",
+  "special_teams_grades_position"
+)
+
+actual_team_cols <- c(
+  "blocking_grades_team_name",
+  "run_blocking_team_name",
+  "pass_blocking_team_name",
+  "coverage_grades_team_name",
+  "coverage_schemes_team_name",
+  "defensive_grades_team_name",
+  "pass_rush_grades_team_name",
+  "pass_rushing_productivity_team_name",
+  "run_defense_grades_team_name",
+  "slot_coverage_team_name",
+  "allowed_pressure_team_name",
+  "passing_concept_team_name",
+  "passing_depth_team_name",
+  "passing_grades_team_name",
+  "passing_pressure_team_name",
+  "time_in_pocket_team_name",
+  "receiving_concept_team_name",
+  "receiving_depth_team_name",
+  "receiving_grades_team_name",
+  "receiving_vs_scheme_team_name",
+  "rushing_grades_team_name",
+  "field_goals_grades_team_name",
+  "kickoff_and_punt_return_grades_team_name",
+  "kickoff_grades_team_name",
+  "punting_grades_team_name",
+  "special_teams_grades_team_name"
+)
+
+# Filter to only columns that exist in your data
+actual_position_cols <- actual_position_cols[actual_position_cols %in% names(cpff_stats)]
+actual_team_cols <- actual_team_cols[actual_team_cols %in% names(cpff_stats)]
+
+# Create the position and team_name columns
+names_pff <- cpff_stats %>%
+  mutate(
+    across(all_of(actual_position_cols), ~na_if(., "")),
+    across(all_of(actual_team_cols), ~na_if(., ""))
+  ) %>%
+  mutate(
+    position = coalesce(!!!syms(actual_position_cols)),
+    team_name = coalesce(!!!syms(actual_team_cols))
+  ) %>%
+  select(year, week, player_id, player, position, team_name)
+
+# Now continue with the rest of your analysis
+# First, let's get unique player-team-year combinations
+player_teams <- names_pff %>%
+  distinct(player_id, player, team_name, year) %>%
+  group_by(player_id) %>%
+  arrange(year) %>%
+  mutate(team_changed = team_name != lag(team_name, default = first(team_name))) %>%
+  filter(row_number() == 1 | team_changed) %>%
+  ungroup() %>%
+  arrange(player_id, year)
+
+# Get earliest and latest years for each player
+player_years <- names_pff %>%
+  group_by(player_id) %>%
+  summarise(
+    earliest_year = min(year),
+    latest_year = max(year)
+  )
+
+# Get most recent position for each player
+player_position <- names_pff %>%
+  group_by(player_id) %>%
+  arrange(desc(year), desc(week)) %>%
+  slice(1) %>%
+  select(player_id, position)
+
+# Get sequential teams for each player
+library(tidyr)
+player_team_history <- player_teams %>%
+  group_by(player_id) %>%
+  arrange(year) %>%
+  mutate(
+    team_sequence = paste0("team", row_number())
+  ) %>%
+  pivot_wider(
+    id_cols = player_id,
+    names_from = team_sequence,
+    values_from = team_name
+  )
+
+# Get most recent player name
+player_names <- names_pff %>%
+  group_by(player_id) %>%
+  arrange(desc(year), desc(week)) %>%
+  slice(1) %>%
+  select(player_id, player)
+
+# Combine all information
+final_pff_roster <- player_names %>%
+  left_join(player_years, by = "player_id") %>%
+  left_join(player_position, by = "player_id") %>%
+  left_join(player_team_history, by = "player_id")
+
+# Write the final roster
+write.csv(final_pff_roster, "pff_roster.csv", row.names = FALSE)
+```
+
+
+<!-- ```{r} -->
+<!-- library(dplyr) -->
+<!-- names_pff <- cpff_stats %>% select(year, week, player, position, team_name, player_id) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # First, let's get unique player-team-year combinations -->
+<!-- # This will handle cases where players switch teams, ignoring same-team repeats -->
+<!-- player_teams <- names_pff %>% -->
+<!--   distinct(player_id, player, team_name, year) %>% -->
+<!--   group_by(player_id) %>% -->
+<!--   arrange(year) %>% -->
+<!--   # Only keep rows where team changes -->
+<!--   mutate(team_changed = team_name != lag(team_name, default = first(team_name))) %>% -->
+<!--   filter(row_number() == 1 | team_changed) %>% -->
+<!--   ungroup() %>% -->
+<!--   arrange(player_id, year) -->
+
+<!-- # Get earliest and latest years for each player -->
+<!-- player_years <- names_pff %>% -->
+<!--   group_by(player_id) %>% -->
+<!--   summarise( -->
+<!--     earliest_year = min(year), -->
+<!--     latest_year = max(year) -->
+<!--   ) -->
+
+<!-- # Get most recent position for each player -->
+<!-- player_position <- names_pff %>% -->
+<!--   group_by(player_id) %>% -->
+<!--   arrange(desc(year), desc(week)) %>% -->
+<!--   slice(1) %>% -->
+<!--   select(player_id, position) -->
+
+<!-- # Get sequential teams for each player (only when team actually changes) -->
+<!-- player_team_history <- player_teams %>% -->
+<!--   group_by(player_id) %>% -->
+<!--   arrange(year) %>% -->
+<!--   mutate( -->
+<!--     team_sequence = paste0("team", row_number()) -->
+<!--   ) %>% -->
+<!--   pivot_wider( -->
+<!--     id_cols = player_id, -->
+<!--     names_from = team_sequence, -->
+<!--     values_from = team_name -->
+<!--   ) -->
+
+<!-- # Get most recent player name -->
+<!-- player_names <- names_pff %>% -->
+<!--   group_by(player_id) %>% -->
+<!--   arrange(desc(year), desc(week)) %>% -->
+<!--   slice(1) %>% -->
+<!--   select(player_id, player) -->
+
+<!-- # Combine all information -->
+<!-- final_pff_roster <- player_names %>% -->
+<!--   left_join(player_years, by = "player_id") %>% -->
+<!--   left_join(player_position, by = "player_id") %>% -->
+<!--   left_join(player_team_history, by = "player_id") -->
+
+<!-- ``` -->
+<!-- write -->
+<!-- ```{r} -->
+<!-- write.csv(final_pff_roster, "pff_roster.csv", row.names = FALSE) -->
+<!-- ``` -->
+
+

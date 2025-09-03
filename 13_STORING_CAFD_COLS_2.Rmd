@@ -1,0 +1,221 @@
+---
+title: "NFL_GRADES_COLUMNS"
+output: html_document
+date: "2025-03-04"
+---
+
+# NFL Position Grades Column Generator
+# Uses only the predefined grades and def_grades metrics
+# Plus special teams kicker and punter
+
+```{r}
+library(data.table)
+
+# Define position groups with only the specified grades metrics
+position_groups <- list(
+  # OFFENSE - Using only the "grades" metrics
+  "QB" = list(
+    positions = c("QB"),
+    metrics = c("passing_depth_short_grades_pass_12w", "passing_depth_medium_grades_pass_12w", "passing_depth_deep_grades_pass_12w")
+  ),
+  
+  "RB_FB" = list(
+    positions = c("RB", "FB"),
+    metrics = c("receiving_grades_grades_pass_block_12w", "rushing_grades_grades_run_12w", "receiving_depth_short_grades_pass_route_12w", "receiving_depth_medium_grades_pass_route_12w", "receiving_depth_deep_grades_pass_route_12w")
+  ),
+  
+  "WR" = list(
+    positions = c("WR"),
+    metrics = c("blocking_grades_grades_run_block_12w", "receiving_depth_short_grades_pass_route_12w", "receiving_depth_medium_grades_pass_route_12w", "receiving_depth_deep_grades_pass_route_12w")
+  ),
+  
+  "TE" = list(
+    positions = c("TE"),
+    metrics = c("blocking_grades_grades_pass_block_12w", "blocking_grades_grades_run_block_12w", "receiving_depth_short_grades_pass_route_12w", "receiving_depth_medium_grades_pass_route_12w", "receiving_depth_deep_grades_pass_route_12w")
+  ),
+  
+  "OL" = list(
+    positions = c("T", "G", "C"),
+    metrics = c("blocking_grades_grades_pass_block_12w", "blocking_grades_grades_run_block_12w")
+  ),
+  
+  # DEFENSE - Using only the "def_grades" metrics
+  "DL" = list(
+    positions = c("DE", "DT", "NT"),
+    metrics = c("defensive_grades_grades_run_defense_12w", "defensive_grades_grades_pass_rush_defense_12w")
+  ),
+  
+  "LB" = list(
+    positions = c("ILB", "OLB", "MLB", "LB"),
+    metrics = c("defensive_grades_grades_run_defense_12w", "coverage_schemes_man_grades_coverage_defense_12w", "coverage_schemes_zone_grades_coverage_defense_12w")
+  ),
+  
+  "DB" = list(
+    positions = c("CB", "FS", "SS", "DB"),
+    metrics = c("defensive_grades_grades_run_defense_12w", "coverage_schemes_man_grades_coverage_defense_12w", "coverage_schemes_zone_grades_coverage_defense_12w")
+  ),
+  
+  # SPECIAL TEAMS - As requested
+  "K" = list(
+    positions = c("K"),
+    metrics = c("field_goals_grades_grades_fgep_kicker_12w")
+  ),
+  
+  "P" = list(
+    positions = c("P"),
+    metrics = c("punting_grades_grades_punter_12w")
+  )
+)
+
+# Function to generate all column names
+generate_grades_columns <- function(max_position_count = 3) {
+  all_columns <- c()
+  
+  # Process each position group
+  for (group_name in names(position_groups)) {
+    group_info <- position_groups[[group_name]]
+    positions <- group_info$positions
+    metrics <- group_info$metrics
+    
+    # For each position in the group
+    for (position in positions) {
+      # For each possible position number (1, 2, 3, etc.)
+      for (pos_num in 1:max_position_count) {
+        # For each metric
+        for (metric in metrics) {
+          # Determine side based on position groups
+          if (group_name %in% c("QB", "RB_FB", "WR", "TE", "OL")) {
+            side <- "offense"
+            base_pattern <- paste0("starter_", side, "_", position, "_", pos_num)
+          } else if (group_name %in% c("DL", "LB", "DB")) {
+            side <- "defense"
+            base_pattern <- paste0("starter_", side, "_", position, "_", pos_num)
+          } else {
+            # Special teams - use the specific format you requested
+            if (position == "K") {
+              base_pattern <- paste0("kicker_id")
+            } else if (position == "P") {
+              base_pattern <- paste0("punter_id")
+            }
+          }
+          
+          all_columns <- c(all_columns, paste0(base_pattern, "_", metric))
+        }
+      }
+    }
+  }
+  
+  # Remove duplicates and return as data frame
+  result_df <- data.frame(column_name = unique(all_columns))
+  return(result_df)
+}
+
+# Function to generate and save the grades file
+generate_grades_file <- function(output_filename = "nfl_player_grades_columns.csv") {
+  cat("Generating NFL player grades columns using predefined metrics...\n")
+  
+  # Generate all columns
+  columns <- generate_grades_columns()
+  
+  # Save to file
+  write.csv(columns, file = output_filename, row.names = FALSE, quote = TRUE)
+  
+  cat("Saved", nrow(columns), "columns to", output_filename, "\n")
+  
+  # Create summary by position group
+  summary_data <- data.frame(
+    position_group = character(),
+    positions = character(),
+    num_metrics = numeric(),
+    metric_type = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  for (group_name in names(position_groups)) {
+    group_info <- position_groups[[group_name]]
+    metric_type <- if (group_name %in% c("QB", "RB_FB", "WR", "TE", "OL")) {
+      "grades (offense)"
+    } else if (group_name %in% c("DL", "LB", "DB")) {
+      "def_grades (defense)"
+    } else {
+      "special teams"
+    }
+    
+    summary_data <- rbind(summary_data, data.frame(
+      position_group = group_name,
+      positions = paste(group_info$positions, collapse = ", "),
+      num_metrics = length(group_info$metrics),
+      metric_type = metric_type,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  # Save summary
+  write.csv(summary_data, file = "nfl_grades_summary.csv", row.names = FALSE)
+  
+  return(list(columns = columns, summary = summary_data))
+}
+
+# Function to show the structure
+show_grades_structure <- function() {
+  cat("NFL Grades Structure (Using Predefined Metrics Only):\n")
+  cat("====================================================\n\n")
+  
+  for (group_name in names(position_groups)) {
+    group_info <- position_groups[[group_name]]
+    metric_type <- if (group_name %in% c("QB", "RB_FB", "WR", "TE", "OL")) {
+      "GRADES (OFFENSE)"
+    } else if (group_name %in% c("DL", "LB", "DB")) {
+      "DEF_GRADES (DEFENSE)"
+    } else {
+      "SPECIAL TEAMS"
+    }
+    
+    cat("Group:", group_name, "(", metric_type, ")\n")
+    cat("Positions:", paste(group_info$positions, collapse = ", "), "\n")
+    cat("Number of metrics:", length(group_info$metrics), "\n")
+    cat("Metrics:", paste(group_info$metrics, collapse = ", "), "\n")
+    cat("\n")
+  }
+}
+
+# Test function
+test_grades_generation <- function() {
+  cat("Testing grades column generation with predefined metrics...\n\n")
+  
+  cols <- generate_grades_columns(max_position_count = 2)
+  cat("Generated", nrow(cols), "total columns\n")
+  
+  # Show samples by type
+  offense_cols <- cols[grepl("starter_offense", cols$column_name), ]
+  defense_cols <- cols[grepl("starter_defense", cols$column_name), ]
+  special_cols <- cols[grepl("(kicker_id|punter_id)", cols$column_name), ]
+  
+  cat("Offense columns (grades):", nrow(offense_cols), "\n")
+  cat("Defense columns (def_grades):", nrow(defense_cols), "\n")
+  cat("Special teams columns:", nrow(special_cols), "\n\n")
+  
+  cat("Sample offense columns:\n")
+  print(head(offense_cols$column_name, 3))
+  cat("\nSample defense columns:\n")
+  print(head(defense_cols$column_name, 3))
+  cat("\nSample special teams columns:\n")
+  print(head(special_cols$column_name, 2))
+}
+
+# Main execution
+cat("NFL Grades Column Generator (Predefined Metrics Only) loaded.\n")
+cat("Available functions:\n")
+cat("- generate_grades_file(): Generate the main CSV file\n")
+cat("- show_grades_structure(): Show position groupings and metrics\n")
+cat("- test_grades_generation(): Test the generation process\n\n")
+
+# Run the generation
+result <- generate_grades_file()
+cat("\nGeneration complete!\n")
+cat("Total columns generated:", nrow(result$columns), "\n")
+
+# Show summary
+cat("\nSummary by position group:\n")
+print(result$summary)
+```

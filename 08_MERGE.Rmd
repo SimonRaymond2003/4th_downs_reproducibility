@@ -1,0 +1,252 @@
+---
+title: "MERGE"
+output: html_document
+date: "2024-12-19"
+---
+load in everything
+
+```{r}
+# First ensure all files are read in properly
+pbp_roster <- read.csv("roster.csv")
+pff_roster <- read.csv("pff_roster.csv")
+pbp_unique_ids <- read.csv("pbp_unique_gsis_ids.csv")
+
+```
+
+```{r}
+str(pbp_roster)
+str(pff_roster)
+str(pbp_unique_ids)
+```
+
+```{r}
+# Filter pbp_roster in place
+pbp_roster <- pbp_roster[pbp_roster$gsis_id %in% pbp_unique_ids$gsis_id, ]
+```
+
+look in pbp roster and get rid of the cols that have a pff id that isnt na (save those into save1 df) then take those pffs and remove those from pff roster (put those removed ones into save2)
+
+```{r}
+# First, split pbp_roster based on pff_id
+# save1 will contain rows where pff_id is not NA
+save1 <- pbp_roster[!is.na(pbp_roster$pff_id), ]
+
+# Get the remaining pbp_roster rows (where pff_id is NA)
+pbp_roster_remaining <- pbp_roster[is.na(pbp_roster$pff_id), ]
+
+# Get the pff_ids that we found in pbp_roster
+pff_ids_to_remove <- unique(save1$pff_id)
+
+# Create save2 with the matching rows from pff_roster
+save2 <- pff_roster[pff_roster$player_id %in% pff_ids_to_remove, ]
+
+# Remove those rows from pff_roster
+pff_roster_remaining <- pff_roster[!pff_roster$player_id %in% pff_ids_to_remove, ]
+
+# Print the dimensions of each resulting dataframe to verify
+print("Dimensions of save1 (pbp_roster with pff_ids):")
+print(dim(save1))
+
+print("Dimensions of remaining pbp_roster:")
+print(dim(pbp_roster_remaining))
+
+print("Dimensions of save2 (matching pff_roster entries):")
+print(dim(save2))
+
+print("Dimensions of remaining pff_roster:")
+print(dim(pff_roster_remaining))
+```
+write save
+```{r}
+write.csv(save1, "saves_pbp.csv", row.names=FALSE)
+```
+
+
+2 pbp players did not match up they where not found in pff.
+
+```{r}
+# Function to get unique values and their counts from a vector
+count_unique <- function(x) {
+  tbl <- table(x, useNA = "ifany")
+  return(sort(tbl, decreasing = TRUE))
+}
+
+# Analysis for pbp_roster_remaining
+print("=== PBP ROSTER REMAINING ANALYSIS ===")
+
+print("\nPosition Distribution:")
+print(count_unique(pbp_roster_remaining$position))
+
+print("\nDepth Chart Position Distribution:")
+print(count_unique(pbp_roster_remaining$depth_chart_position))
+
+# Combine all team columns and count unique values
+pbp_teams <- c(
+  pbp_roster_remaining$team1,
+  pbp_roster_remaining$team2,
+  pbp_roster_remaining$team3,
+  pbp_roster_remaining$team4,
+  pbp_roster_remaining$team5,
+  pbp_roster_remaining$team6,
+  pbp_roster_remaining$team7,
+  pbp_roster_remaining$team8
+)
+print("\nAll Teams Distribution (across all team columns):")
+print(count_unique(pbp_teams))
+
+# Analysis for each team column separately
+print("\nTeam Distribution by Column in PBP:")
+for(i in 1:8) {
+  col_name <- paste0("team", i)
+  print(paste("\n", col_name, ":"))
+  print(count_unique(pbp_roster_remaining[[col_name]]))
+}
+
+# Analysis for pff_roster_remaining
+print("\n\n=== PFF ROSTER REMAINING ANALYSIS ===")
+
+print("\nPosition Distribution:")
+print(count_unique(pff_roster_remaining$position))
+
+# Combine all team columns and count unique values
+pff_teams <- c(
+  pff_roster_remaining$team1,
+  pff_roster_remaining$team2,
+  pff_roster_remaining$team3,
+  pff_roster_remaining$team4,
+  pff_roster_remaining$team5,
+  pff_roster_remaining$team6,
+  pff_roster_remaining$team7,
+  pff_roster_remaining$team8
+)
+print("\nAll Teams Distribution (across all team columns):")
+print(count_unique(pff_teams))
+
+# Analysis for each team column separately
+print("\nTeam Distribution by Column in PFF:")
+for(i in 1:8) {
+  col_name <- paste0("team", i)
+  print(paste("\n", col_name, ":"))
+  print(count_unique(pff_roster_remaining[[col_name]]))
+}
+
+# Print total number of non-NA values in team columns for each dataset
+print("\nTotal non-NA team entries in PBP:")
+print(sum(!is.na(pbp_teams)))
+
+print("\nTotal non-NA team entries in PFF:")
+print(sum(!is.na(pff_teams)))
+```
+
+
+```{r}
+# Define mapping from PFF positions to PBP broader categories
+position_map <- list(
+  # Offensive Line
+  "T" = "OL",   # Tackle -> OL
+  "G" = "OL",   # Guard -> OL
+  "C" = "OL",   # Center -> OL
+  # Defensive positions
+  "CB" = "DB",  # Cornerback -> DB
+  "S" = "DB",   # Safety -> DB
+  "DI" = "DL",  # Defensive Interior -> DL
+  "ED" = "DL",  # Edge -> LB
+  # Skill positions stay the same
+  "WR" = "WR",
+  "TE" = "TE",
+  "HB" = "RB",  # Map HB back to RB
+  "FB" = "RB",  # Fullback -> RB
+  "QB" = "QB",
+  # Special teams stay the same
+  "K" = "K",
+  "P" = "P",
+  "LS" = "LS"
+)
+
+# Show original PFF position distribution
+print("Original PFF Position Distribution:")
+print(sort(table(pff_roster_remaining$position), decreasing=TRUE))
+
+# Create and apply new position mapping
+pff_roster_remaining$new_position <- pff_roster_remaining$position
+for(pos in names(position_map)) {
+  pff_roster_remaining$new_position[pff_roster_remaining$position == pos] <- position_map[[pos]]
+}
+
+# Show new distribution and compare to target
+print("\nNew PFF Position Distribution (after mapping to PBP categories):")
+print(sort(table(pff_roster_remaining$new_position), decreasing=TRUE))
+
+print("\nTarget PBP Position Distribution:")
+print(sort(table(pbp_roster_remaining$position), decreasing=TRUE))
+
+# Update the position column
+pff_roster_remaining$position <- pff_roster_remaining$new_position
+pff_roster_remaining$new_position <- NULL
+```
+
+```{r}
+# Create team name mapping from PFF to PBP format
+team_map <- list(
+  "ARZ" = "ARI",
+  "BLT" = "BAL",
+  "CLV" = "CLE",
+  "HST" = "HOU",
+  "LV" = "LV",    # Already matches
+  "LA" = "LA",    # Already matches
+  "OAK" = "OAK",  # Already matches
+  "SD" = "SD"     # Already matches
+)
+
+# Loop through all team columns and update them
+for(i in 1:8) {
+  team_col <- paste0("team", i)
+  # Only process if the column exists
+  if(team_col %in% names(pff_roster_remaining)) {
+    for(old_team in names(team_map)) {
+      pff_roster_remaining[[team_col]][pff_roster_remaining[[team_col]] == old_team] <- team_map[[old_team]]
+    }
+  }
+}
+
+# Show distributions before and after to verify
+print("Team distributions in both datasets after standardization:")
+
+# Function to combine all team columns and count
+get_all_teams <- function(df, prefix="team") {
+  team_cols <- grep(prefix, names(df), value=TRUE)
+  all_teams <- c()
+  for(col in team_cols) {
+    all_teams <- c(all_teams, df[[col]])
+  }
+  return(sort(table(all_teams, useNA="ifany"), decreasing=TRUE))
+}
+
+print("\nPBP Teams (for reference):")
+print(get_all_teams(pbp_roster_remaining))
+
+print("\nPFF Teams (after conversion):")
+print(get_all_teams(pff_roster_remaining))
+```
+
+kill depth_chart_position in pbp roster remaining, and pff_id
+
+```{r}
+# Remove depth_chart_position from pbp_roster_remaining
+pbp_roster_remaining$depth_chart_position <- NULL
+pbp_roster_remaining$pff_id <- NULL
+pbp_roster_remaining$X <- NULL
+```
+
+write them to pbp and pff roster remaining
+
+```{r}
+# Write the updated dataframes to new CSV files
+write.csv(pbp_roster_remaining, "pbp_MERGE.csv", row.names=FALSE)
+write.csv(pff_roster_remaining, "pff_MERGE.csv", row.names=FALSE)
+
+```
+
+
+
+

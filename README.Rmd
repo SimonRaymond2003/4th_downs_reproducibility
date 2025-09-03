@@ -1,0 +1,21 @@
+---
+title: "4th Downs Decoded Readme file"
+output: github_document
+---
+
+System requirements on windows - 64 gbs of RAM
+
+Each file can be run in sequential order. You will need to change file paths to adapt to your local machine as needed. 
+
+The player data files need to be bought and individually downloaded from PFF via https://premium.pff.com/nfl/positions/2024/PRE. 
+
+Download all the weekly regular season game reports from 2016 to 2023. 
+
+Organize the directory as such:
+
+
+
+
+
+
+

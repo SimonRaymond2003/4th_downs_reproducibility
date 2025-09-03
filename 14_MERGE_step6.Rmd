@@ -1,0 +1,377 @@
+---
+title: "MERGE_step6_updated"
+output: html_document
+date: "2024-12-23"
+---
+
+```{r}
+# Load required libraries
+library(data.table)
+```
+
+```{r}
+# Read data files with proper type handling
+final_key <- fread("final_key.csv")
+cafd <- fread("cafd.csv")
+cfd <- fread("cfd.csv")
+ctd <- fread("ctd.csv")
+lookup_all <- fread("lookup_all.csv.gz")
+
+# Function to check and log column types
+check_column_types <- function(dt, prefix = "") {
+  types <- sapply(dt, class)
+  type_summary <- table(unlist(types))
+  cat(sprintf("\n%sColumn type summary:", prefix))
+  print(type_summary)
+  return(types)
+}
+
+# Log initial column types
+cat("\nChecking initial data types:")
+lookup_types <- check_column_types(lookup_all, "lookup_all: ")
+```
+
+```{r}
+# Extract all unique starter columns from the datasets
+get_starter_columns <- function(df) {
+  # Get columns that match the pattern starter_offense_POS_NUM or starter_defense_POS_NUM
+  starter_cols <- grep("^starter_(offense|defense)_[A-Z]+_[0-9]+$", names(df), value = TRUE)
+  return(starter_cols)
+}
+
+# Extract specialist columns (kicker_id, punter_id, etc.)
+get_specialist_columns <- function(df) {
+  # Look for columns ending in _id that represent specialists
+  specialist_cols <- grep("^(kicker|punter)_id$", names(df), value = TRUE)
+  return(specialist_cols)
+}
+
+# Get all unique starter and specialist columns across datasets
+all_starter_cols <- unique(c(
+  get_starter_columns(cafd),
+  get_starter_columns(cfd),
+  get_starter_columns(ctd)
+))
+
+all_specialist_cols <- unique(c(
+  get_specialist_columns(cafd),
+  get_specialist_columns(cfd),
+  get_specialist_columns(ctd)
+))
+
+cat("\nFound", length(all_starter_cols), "unique starter columns\n")
+cat("Found", length(all_specialist_cols), "unique specialist columns\n")
+cat("Sample starter columns:", head(all_starter_cols, 10), "\n")
+cat("Specialist columns:", all_specialist_cols, "\n")
+
+# Map GSIS IDs to PFF IDs for starter columns
+get_pff_ids_starters <- function(row, final_key, starter_cols) {
+  row_list <- as.list(row)
+  
+  # Get all starter IDs from the row
+  gsis_ids <- sapply(starter_cols, function(col) {
+    if(col %in% names(row_list)) {
+      row_list[[col]]
+    } else {
+      NA
+    }
+  })
+  
+  # Remove NA values
+  valid_idx <- !is.na(gsis_ids)
+  gsis_ids <- gsis_ids[valid_idx]
+  col_names <- starter_cols[valid_idx]
+  
+  # Map to PFF IDs
+  pff_ids <- final_key[match(gsis_ids, gsis_id)]$pff_id
+  names(pff_ids) <- col_names
+  
+  return(pff_ids)
+}
+
+# Map GSIS IDs to PFF IDs for specialist columns
+get_pff_ids_specialists <- function(row, final_key, specialist_cols) {
+  row_list <- as.list(row)
+  
+  # Get all specialist IDs from the row
+  gsis_ids <- sapply(specialist_cols, function(col) {
+    if(col %in% names(row_list)) {
+      row_list[[col]]
+    } else {
+      NA
+    }
+  })
+  
+  # Remove NA values
+  valid_idx <- !is.na(gsis_ids)
+  gsis_ids <- gsis_ids[valid_idx]
+  col_names <- specialist_cols[valid_idx]
+  
+  # Map to PFF IDs
+  pff_ids <- final_key[match(gsis_ids, gsis_id)]$pff_id
+  names(pff_ids) <- col_names
+  
+  return(pff_ids)
+}
+
+# Function to process a single player column (works for both starters and specialists)
+process_single_player <- function(base_data, lookup_data, player_col, col_types, 
+                                 dataset_name, chunk_size=500) {
+  # Get all columns except join keys
+  all_stats_cols <- setdiff(names(lookup_data), c("player_id", "year", "week"))
+  total_cols <- length(all_stats_cols)
+  num_chunks <- ceiling(total_cols / chunk_size)
+  
+  player_start_time <- Sys.time()
+  cat(sprintf("\n\nProcessing %s:", player_col))
+  cat(sprintf("\nTotal columns: %d", total_cols))
+  cat(sprintf("\nNumber of chunks: %d", num_chunks))
+  
+  # Process each chunk for this player
+  for(chunk in 1:num_chunks) {
+    chunk_start_time <- Sys.time()
+    
+    # Calculate column indices for this chunk
+    start_idx <- (chunk-1) * chunk_size + 1
+    end_idx <- min(chunk * chunk_size, total_cols)
+    chunk_cols <- all_stats_cols[start_idx:end_idx]
+    
+    # Process the chunk
+    if(chunk == 1) {
+      # First chunk includes base data
+      result <- merge_player_chunk(base_data, lookup_data, player_col, 
+                                  chunk_cols, col_types, chunk)
+    } else {
+      # Read previous chunk result
+      prev_file <- sprintf("%s_%s_chunk%d.csv.gz", 
+                          dataset_name, gsub("/", "_", player_col), chunk-1)
+      prev_result <- fread(prev_file)
+      result <- merge_player_chunk(prev_result, lookup_data, player_col, 
+                                  chunk_cols, col_types, chunk)
+      rm(prev_result); gc()
+    }
+    
+    # Save chunk result
+    chunk_file <- sprintf("%s_%s_chunk%d.csv.gz", 
+                         dataset_name, gsub("/", "_", player_col), chunk)
+    fwrite(result, chunk_file)
+    
+    chunk_end_time <- Sys.time()
+    cat(sprintf("\nChunk %d completed in %s", chunk, 
+                format(chunk_end_time - chunk_start_time, digits=2)))
+    
+    rm(result); gc()
+  }
+  
+  # Rename final chunk to complete file
+  file.rename(sprintf("%s_%s_chunk%d.csv.gz", dataset_name, gsub("/", "_", player_col), num_chunks),
+              sprintf("%s_%s_complete.csv.gz", dataset_name, gsub("/", "_", player_col)))
+  
+  # Clean up intermediate chunks
+  for(chunk in 1:(num_chunks-1)) {
+    file.remove(sprintf("%s_%s_chunk%d.csv.gz", 
+                       dataset_name, gsub("/", "_", player_col), chunk))
+  }
+  
+  player_end_time <- Sys.time()
+  cat(sprintf("\n%s completed in %s", player_col,
+              format(player_end_time - player_start_time, digits=2)))
+}
+
+# Function to merge stats for a single player's column chunk
+merge_player_chunk <- function(dt, player_stats_dt, player_col, stats_cols, col_types, chunk_num) {
+  cat(sprintf("\nProcessing %s chunk %d (%d columns)", 
+              player_col, chunk_num, length(stats_cols)))
+  
+  # Check if the column exists in the data
+  if(!player_col %in% names(dt)) {
+    cat(sprintf("\nWarning: Column %s not found in dataset", player_col))
+    return(dt)
+  }
+  
+  # Create column name to store PFF ID
+  pff_col <- paste0(player_col, "_pff")
+  
+  # New column names for the stats
+  new_cols <- paste0(player_col, "_", stats_cols)
+  
+  dt[, temp_key := .I]
+  
+  # Perform the merge
+  result <- player_stats_dt[
+    dt[, .(temp_key, 
+           player_id = get(pff_col), 
+           year = season, 
+           week = week)],
+    on = .(player_id, year, week),
+    nomatch=NA
+  ][, c("temp_key", ..stats_cols), with=FALSE]
+  
+  # Add columns with proper types
+  for(i in seq_along(stats_cols)) {
+    col_type <- col_types[stats_cols[i]]
+    if("logical" %in% col_type) {
+      dt[, (new_cols[i]) := as.logical(result[[stats_cols[i]]])]
+    } else if("factor" %in% col_type) {
+      dt[, (new_cols[i]) := as.factor(result[[stats_cols[i]]])]
+    } else {
+      dt[, (new_cols[i]) := result[[stats_cols[i]]]]
+    }
+  }
+  
+  dt[, temp_key := NULL]
+  
+  return(dt)
+}
+
+# Function to process entire dataset with starter columns AND specialists
+process_full_dataset_players <- function(base_data, lookup_data, dataset_name) {
+  # Get column types
+  col_types <- check_column_types(lookup_data)
+  
+  # Get all starter and specialist columns in this dataset
+  starter_cols <- get_starter_columns(base_data)
+  specialist_cols <- get_specialist_columns(base_data)
+  all_player_cols <- c(starter_cols, specialist_cols)
+  
+  cat(sprintf("\nFound %d starter columns in %s\n", length(starter_cols), dataset_name))
+  cat(sprintf("Found %d specialist columns in %s\n", length(specialist_cols), dataset_name))
+  cat(sprintf("Total player columns to process: %d\n", length(all_player_cols)))
+  
+  # Map IDs once at the start
+  cat(sprintf("\nMapping player IDs for %s...\n", dataset_name))
+  
+  # Add PFF IDs for each starter column
+  if(length(starter_cols) > 0) {
+    for(i in 1:nrow(base_data)) {
+      if(i %% 1000 == 0) cat(sprintf("\rProcessing starter row %d of %d (%.1f%%)", 
+                                    i, nrow(base_data), i/nrow(base_data)*100))
+      
+      # Get PFF IDs for this row
+      pff_ids <- get_pff_ids_starters(base_data[i,], final_key, starter_cols)
+      
+      # Add PFF IDs to the row
+      for(col_name in names(pff_ids)) {
+        pff_col_name <- paste0(col_name, "_pff")
+        set(base_data, i, pff_col_name, pff_ids[[col_name]])
+      }
+    }
+    cat("\nStarter ID mapping completed\n")
+  }
+  
+  # Add PFF IDs for each specialist column
+  if(length(specialist_cols) > 0) {
+    for(i in 1:nrow(base_data)) {
+      if(i %% 1000 == 0) cat(sprintf("\rProcessing specialist row %d of %d (%.1f%%)", 
+                                    i, nrow(base_data), i/nrow(base_data)*100))
+      
+      # Get PFF IDs for this row
+      pff_ids <- get_pff_ids_specialists(base_data[i,], final_key, specialist_cols)
+      
+      # Add PFF IDs to the row
+      for(col_name in names(pff_ids)) {
+        pff_col_name <- paste0(col_name, "_pff")
+        set(base_data, i, pff_col_name, pff_ids[[col_name]])
+      }
+    }
+    cat("\nSpecialist ID mapping completed\n")
+  }
+  
+  # Process each player column (both starters and specialists)
+  for(player_col in all_player_cols) {
+    process_single_player(base_data, lookup_data, player_col, 
+                         col_types, dataset_name)
+  }
+  
+  cat(sprintf("\nCompleted creating intermediate files for %s", dataset_name))
+}
+
+# Function to combine position-specific files for a dataset
+combine_player_files <- function(dataset_name) {
+  library(data.table)
+  
+  cat(sprintf("\nProcessing %s player files...", dataset_name))
+  
+  # Find all complete files for this dataset (both starters and specialists)
+  complete_files <- list.files(pattern = sprintf("%s_(starter_.*|.*_id)_complete\\.csv\\.gz$", dataset_name))
+  
+  cat(sprintf("\nFound %d complete files to merge", length(complete_files)))
+  
+  if(length(complete_files) == 0) {
+    stop("No complete files found!")
+  }
+  
+  result <- NULL
+  
+  # Process each file
+  for(i in seq_along(complete_files)) {
+    file <- complete_files[i]
+    cat(sprintf("\nProcessing file %d/%d: %s", i, length(complete_files), file))
+    
+    # Read the file
+    file_data <- fread(file)
+    
+    if(is.null(result)) {
+      # For first file, use it as base
+      result <- file_data
+      cat(sprintf("\nInitial data loaded with %d rows and %d columns", 
+                 nrow(result), ncol(result)))
+    } else {
+      # For subsequent files, merge only new columns
+      new_cols <- setdiff(names(file_data), names(result))
+      if(length(new_cols) > 0) {
+        result[, (new_cols) := file_data[, ..new_cols]]
+        cat(sprintf("\nAdded %d new columns", length(new_cols)))
+      }
+    }
+    
+    # Clean up to free memory
+    rm(file_data)
+    gc()
+  }
+  
+  # Save final merged result
+  output_file <- sprintf("all_merged_%s.csv.gz", dataset_name)
+  fwrite(result, output_file)
+  
+  cat(sprintf("\n\nFinal merged file created: %s", output_file))
+  cat(sprintf("\nFinal dimensions: %d rows x %d columns", 
+              nrow(result), ncol(result)))
+  
+  # Clean up position-specific files
+  file.remove(complete_files)
+  cat(sprintf("\nCleaned up %d intermediate files", length(complete_files)))
+  
+  return(result)
+}
+```
+
+# Process CAFD
+```{r}
+process_full_dataset_players(cafd, lookup_all, "cafd")
+rm(cafd); gc()
+```
+
+# Process CFD
+```{r}
+process_full_dataset_players(cfd, lookup_all, "cfd")
+rm(cfd); gc()
+```
+
+# Process CTD
+```{r}
+process_full_dataset_players(ctd, lookup_all, "ctd")
+rm(ctd); gc()
+```
+
+# Combine all player files for each dataset
+```{r}
+# Combine CAFD files
+cafd_merged <- combine_player_files("cafd")
+
+# Combine CFD files  
+cfd_merged <- combine_player_files("cfd")
+
+# Combine CTD files
+ctd_merged <- combine_player_files("ctd")
+```

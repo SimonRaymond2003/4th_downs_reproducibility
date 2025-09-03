@@ -1,0 +1,1013 @@
+---
+title: "MERGE_step2"
+output: html_document
+date: "2024-12-19"
+---
+
+```{r}
+# Load the data
+pff <- read.csv("pff_MERGE.csv")
+pbp <- read.csv("pbp_MERGE.csv")
+saves_pbp <- read.csv("saves_pbp.csv")
+```
+
+```{r}
+str(pff)
+str(pbp)
+str(saves_pbp)
+```
+
+```{r}
+```
+
+```{r}
+# Add new columns to pbp for tracking matches
+pbp$pff_id <- NA
+pbp$match_step <- NA
+
+# Print column names to verify addition
+names(pbp)
+```
+
+# step 1
+```{r}
+
+
+# Function to standardize team vectors for comparison
+standardize_teams <- function(teams) {
+  teams <- teams[!is.na(teams)]
+  sort(teams)
+}
+
+# For each pbp player, compare with pff players
+for(i in 1:nrow(pbp)) {
+  if(is.na(pbp$pff_id[i])) {
+    pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+    
+    # Find potential matches in pff
+    matches <- which(
+      pff$player == pbp$full_name[i] &
+      pff$earliest_year == pbp$earliest_season[i] &
+      pff$latest_year == pbp$latest_season[i] &
+      pff$position == pbp$position[i]
+    )
+    
+    # Check team matches for each potential match
+    for(j in matches) {
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(length(pbp_teams) == length(pff_teams) && all(pbp_teams == pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 1
+        break
+      }
+    }
+  }
+}
+
+# Print summary of matches
+cat("Step 1 matches:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+# step 2
+
+```{r}
+# Function to standardize team vectors
+standardize_teams <- function(teams) {
+  teams <- teams[!is.na(teams)]
+  sort(teams)
+}
+
+# Function to get last name
+get_last_name <- function(full_name) {
+  parts <- strsplit(full_name, " ")[[1]]
+  tail(parts, 1)
+}
+
+# For each unmatched pbp player, compare with unmatched pff players
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_last_name <- get_last_name(pbp$full_name[i])
+  
+  # Find potential matches in pff (only among unmatched players)
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    pff_last_name <- get_last_name(pff$player[j])
+    
+    if(pbp_last_name == pff_last_name &&
+       pff$earliest_year[j] == pbp$earliest_season[i] &&
+       pff$latest_year[j] == pbp$latest_season[i] &&
+       pff$position[j] == pbp$position[i]) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(length(pbp_teams) == length(pff_teams) && all(pbp_teams == pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 2
+        break
+      }
+    }
+  }
+}
+
+# Print summary of matches
+cat("\nStep 2 new matches:", sum(pbp$match_step == 2, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+# step 3
+
+```{r}
+# Function to standardize team vectors
+standardize_teams <- function(teams) {
+  teams <- teams[!is.na(teams)]
+  sort(teams)
+}
+
+# Function to clean names
+clean_name <- function(name) {
+  name <- tolower(name)
+  name <- gsub("\\.", "", name)
+  name <- gsub("'", "", name)
+  name
+}
+
+# Function to check teams with one difference allowed
+teams_match_with_one_diff <- function(teams1, teams2) {
+  if(abs(length(teams1) - length(teams2)) > 1) return(FALSE)
+  if(length(teams1) == length(teams2)) {
+    return(sum(teams1 != teams2) <= 1)
+  }
+  if(length(teams1) < length(teams2)) {
+    return(all(teams1 %in% teams2))
+  } else {
+    return(all(teams2 %in% teams1))
+  }
+}
+
+# Process unmatched players
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_clean_name <- clean_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(clean_name(pff$player[j]) == pbp_clean_name &&
+       pff$earliest_year[j] == pbp$earliest_season[i] &&
+       pff$latest_year[j] == pbp$latest_season[i] &&
+       pff$position[j] == pbp$position[i]) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(teams_match_with_one_diff(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 3
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 3 new matches:", sum(pbp$match_step == 3, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+# step 4
+
+```{r}
+# Functions remain the same but update team matching logic
+teams_match_with_two_diff <- function(teams1, teams2) {
+  if(abs(length(teams1) - length(teams2)) > 2) return(FALSE)
+  if(length(teams1) == length(teams2)) {
+    return(sum(teams1 != teams2) <= 2)
+  }
+  if(length(teams1) < length(teams2)) {
+    missing <- sum(!(teams1 %in% teams2))
+    return(missing <= 2)
+  } else {
+    missing <- sum(!(teams2 %in% teams1))
+    return(missing <= 2)
+  }
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_clean_name <- clean_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(clean_name(pff$player[j]) == pbp_clean_name &&
+       pff$earliest_year[j] == pbp$earliest_season[i] &&
+       pff$latest_year[j] == pbp$latest_season[i] &&
+       pff$position[j] == pbp$position[i]) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(teams_match_with_two_diff(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 4
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 4 new matches:", sum(pbp$match_step == 4, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+
+step 5
+
+```{r}
+teams_match_with_one_diff <- function(teams1, teams2) {
+  if(abs(length(teams1) - length(teams2)) > 1) return(FALSE)
+  if(length(teams1) == length(teams2)) return(sum(teams1 != teams2) <= 1)
+  if(length(teams1) < length(teams2)) return(all(teams1 %in% teams2))
+  return(all(teams2 %in% teams1))
+}
+
+years_match_with_one <- function(start1, end1, start2, end2) {
+  abs(start1 - start2) <= 1 && abs(end1 - end2) <= 1
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_clean_name <- clean_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(clean_name(pff$player[j]) == pbp_clean_name &&
+       years_match_with_one(pff$earliest_year[j], pff$latest_year[j],
+                          pbp$earliest_season[i], pbp$latest_season[i]) &&
+       pff$position[j] == pbp$position[i]) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(teams_match_with_one_diff(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 5
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 5 new matches:", sum(pbp$match_step == 5, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+step 6
+
+```{r}
+teams_match_with_one_diff <- function(teams1, teams2) {
+  if(abs(length(teams1) - length(teams2)) > 1) return(FALSE)
+  if(length(teams1) == length(teams2)) return(sum(teams1 != teams2) <= 1)
+  if(length(teams1) < length(teams2)) return(all(teams1 %in% teams2))
+  return(all(teams2 %in% teams1))
+}
+
+years_match_with_one <- function(start1, end1, start2, end2) {
+  abs(start1 - start2) <= 1 && abs(end1 - end2) <= 1
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_clean_name <- clean_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(clean_name(pff$player[j]) == pbp_clean_name &&
+       years_match_with_one(pff$earliest_year[j], pff$latest_year[j],
+                          pbp$earliest_season[i], pbp$latest_season[i])) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(teams_match_with_one_diff(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 6
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 6 new matches:", sum(pbp$match_step == 6, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+# Get unmatched players from pbp
+unmatched_pbp <- pbp[is.na(pbp$pff_id), ]
+unmatched_pff <- pff[!(pff$player_id %in% pbp$pff_id), ]
+
+# Clean names for comparison
+unmatched_pbp$clean_name <- clean_name(unmatched_pbp$full_name)
+unmatched_pff$clean_name <- clean_name(unmatched_pff$player)
+
+# Find matching names
+matching_names <- intersect(unmatched_pbp$clean_name, unmatched_pff$clean_name)
+
+cat("Number of standardized names that match but weren't matched yet:", length(matching_names), "\n\n")
+cat("These names are:\n")
+print(matching_names)
+```
+
+```{r}
+# standardize_teams <- function(teams) {
+#   sort(teams[!is.na(teams)])
+# }
+# 
+# unmatched_pbp <- which(is.na(pbp$pff_id))
+# 
+# for(i in unmatched_pbp) {
+#   if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+#   
+#   pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+#   pbp_clean_name <- clean_name(pbp$full_name[i])
+#   
+#   unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+#   
+#   for(j in unmatched_pff) {
+#     if(clean_name(pff$player[j]) == pbp_clean_name) {
+#       pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+#       
+#       # Check if either teams match perfectly OR seasons match perfectly OR position matches
+#       teams_match <- length(pbp_teams) == length(pff_teams) && all(pbp_teams == pff_teams)
+#       seasons_match <- pff$earliest_year[j] == pbp$earliest_season[i] && 
+#                       pff$latest_year[j] == pbp$latest_season[i]
+#       position_match <- pff$position[j] == pbp$position[i]
+#       
+#       if(teams_match || seasons_match || position_match) {
+#         pbp$pff_id[i] <- pff$player_id[j]
+#         pbp$match_step[i] <- 7
+#         break
+#       }
+#     }
+#   }
+# }
+# 
+# cat("\nStep 7 new matches:", sum(pbp$match_step == 7, na.rm = TRUE), "\n")
+# cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+standardize_teams <- function(teams) {
+  sort(teams[!is.na(teams)])
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_clean_name <- clean_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(clean_name(pff$player[j]) == pbp_clean_name) {
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      # Check if either teams match perfectly OR seasons match perfectly OR position matches
+      teams_match <- length(pbp_teams) == length(pff_teams) && all(pbp_teams == pff_teams)
+      seasons_match <- pff$earliest_year[j] == pbp$earliest_season[i] && 
+                       pff$latest_year[j] == pbp$latest_season[i]
+      position_match <- pff$position[j] == pbp$position[i]
+      
+      # --- FIX STARTS HERE ---
+      # Coerce any NA results from comparisons into FALSE
+      if (is.na(seasons_match)) {
+        seasons_match <- FALSE
+      }
+      if (is.na(position_match)) {
+        position_match <- FALSE
+      }
+      # --- FIX ENDS HERE ---
+      
+      if(teams_match || seasons_match || position_match) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 7
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 7 new matches:", sum(pbp$match_step == 7, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+standardize_teams <- function(teams) {
+  sort(teams[!is.na(teams)])
+}
+
+get_last_name <- function(name) {
+  parts <- strsplit(name, " ")[[1]]
+  tail(parts, 1)
+}
+
+get_first_initial <- function(name) {
+  toupper(substr(strsplit(name, " ")[[1]][1], 1, 1))
+}
+
+teams_match_with_one_diff <- function(teams1, teams2) {
+  if(abs(length(teams1) - length(teams2)) > 1) return(FALSE)
+  if(length(teams1) == length(teams2)) return(sum(teams1 != teams2) <= 1)
+  if(length(teams1) < length(teams2)) return(all(teams1 %in% teams2))
+  return(all(teams2 %in% teams1))
+}
+
+years_match_with_one <- function(start1, end1, start2, end2) {
+  abs(start1 - start2) <= 1 && abs(end1 - end2) <= 1
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_last <- get_last_name(clean_name(pbp$full_name[i]))
+  pbp_initial <- get_first_initial(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    pff_name_parts <- strsplit(pff$player[j], " ")[[1]]
+    pff_first <- pff_name_parts[1]
+    pff_initial <- toupper(substr(pff_first, 1, 1))
+    pff_last <- get_last_name(clean_name(pff$player[j]))
+    
+    if(pbp_last == pff_last && 
+       pbp_initial == pff_initial &&
+       pff$position[j] == pbp$position[i] &&
+       years_match_with_one(pff$earliest_year[j], pff$latest_year[j],
+                          pbp$earliest_season[i], pbp$latest_season[i])) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(teams_match_with_one_diff(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 8
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 8 new matches:", sum(pbp$match_step == 8, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+teams_match_with_two_diff <- function(teams1, teams2) {
+  if(abs(length(teams1) - length(teams2)) > 2) return(FALSE)
+  if(length(teams1) == length(teams2)) return(sum(teams1 != teams2) <= 2)
+  if(length(teams1) < length(teams2)) return(sum(!(teams1 %in% teams2)) <= 2)
+  return(sum(!(teams2 %in% teams1)) <= 2)
+}
+
+clean_name_no_suffix <- function(name) {
+  name <- clean_name(name)
+  name <- gsub(" jr$| sr$| ii$| iii$| iv$", "", name)
+  name
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+  pbp_clean_name <- clean_name_no_suffix(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(clean_name_no_suffix(pff$player[j]) == pbp_clean_name &&
+       abs(pff$earliest_year[j] - pbp$earliest_season[i]) <= 1 &&
+       abs(pff$latest_year[j] - pbp$latest_season[i]) <= 1 &&
+       pff$position[j] == pbp$position[i]) {
+      
+      pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+      
+      if(teams_match_with_two_diff(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 9
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 9 new matches:", sum(pbp$match_step == 9, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+
+```{r}
+# Get unmatched players
+unmatched <- pbp[is.na(pbp$pff_id), ]
+unmatched$full_name
+```
+
+```{r}
+standardize_teams <- function(teams) {
+  sort(teams[!is.na(teams)])
+}
+
+get_last_name <- function(name) {
+  parts <- strsplit(clean_name(name), " ")[[1]]
+  tail(parts, 1)
+}
+
+years_overlap <- function(start1, end1, start2, end2) {
+  !(end1 < start2 || start1 > end2)
+}
+
+teams_have_one_common <- function(teams1, teams2) {
+  any(teams1 %in% teams2)
+}
+
+is_special_teams <- function(pos) {
+  pos %in% c("K", "P", "LS")
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  if(is_special_teams(pbp$position[i])) {
+    pbp_teams <- standardize_teams(unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+    pbp_last <- get_last_name(pbp$full_name[i])
+    
+    unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+    
+    for(j in unmatched_pff) {
+      if(is_special_teams(pff$position[j]) && 
+         get_last_name(pff$player[j]) == pbp_last &&
+         years_overlap(pff$earliest_year[j], pff$latest_year[j],
+                      pbp$earliest_season[i], pbp$latest_season[i])) {
+        
+        pff_teams <- standardize_teams(unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")]))
+        
+        if(teams_have_one_common(pbp_teams, pff_teams)) {
+          pbp$pff_id[i] <- pff$player_id[j]
+          pbp$match_step[i] <- 10
+          break
+        }
+      }
+    }
+  }
+}
+
+cat("\nStep 10 new matches:", sum(pbp$match_step == 10, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+# years_overlap <- function(start1, end1, start2, end2) {
+#   !(end1 < start2 || start1 > end2)
+# }
+# 
+# get_last_name <- function(name) {
+#   parts <- strsplit(clean_name(name), " ")[[1]]
+#   tail(parts, 1)
+# }
+# 
+# unmatched_pbp <- which(is.na(pbp$pff_id))
+# 
+# for(i in unmatched_pbp) {
+#   if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+#   
+#   pbp_last <- get_last_name(pbp$full_name[i])
+#   
+#   unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+#   
+#   for(j in unmatched_pff) {
+#     if(get_last_name(pff$player[j]) == pbp_last &&
+#        pff$position[j] == pbp$position[i] &&
+#        years_overlap(pff$earliest_year[j], pff$latest_year[j],
+#                     pbp$earliest_season[i], pbp$latest_season[i])) {
+#       
+#       pbp$pff_id[i] <- pff$player_id[j]
+#       pbp$match_step[i] <- 11
+#       break
+#     }
+#   }
+# }
+# 
+# cat("\nStep 11 new matches:", sum(pbp$match_step == 11, na.rm = TRUE), "\n")
+# cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+
+years_overlap <- function(start1, end1, start2, end2) {
+  !(end1 < start2 || start1 > end2)
+}
+
+get_last_name <- function(name) {
+  parts <- strsplit(clean_name(name), " ")[[1]]
+  tail(parts, 1)
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_last <- get_last_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    
+    # --- FIX STARTS HERE ---
+    # Create the logical condition first
+    condition <- get_last_name(pff$player[j]) == pbp_last &&
+                 pff$position[j] == pbp$position[i] &&
+                 years_overlap(pff$earliest_year[j], pff$latest_year[j],
+                               pbp$earliest_season[i], pbp$latest_season[i])
+    
+    # Use isTRUE() to safely evaluate the condition. It handles NA by returning FALSE.
+    if(isTRUE(condition)) {
+      pbp$pff_id[i] <- pff$player_id[j]
+      pbp$match_step[i] <- 11
+      break
+    }
+    # --- FIX ENDS HERE ---
+  }
+}
+
+cat("\nStep 11 new matches:", sum(pbp$match_step == 11, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+standardize_name <- function(name) {
+  name <- tolower(name)
+  name <- gsub("\\.", "", name)
+  name <- gsub("'", "", name)
+  name <- gsub(" iv$| iii$| ii$| jr$| sr$| v$| vi$", "", name)
+  name
+}
+
+teams_have_one_common <- function(teams1, teams2) {
+  teams1 <- teams1[!is.na(teams1)]
+  teams2 <- teams2[!is.na(teams2)]
+  any(teams1 %in% teams2)
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+  pbp_std_name <- standardize_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(standardize_name(pff$player[j]) == pbp_std_name) {
+      pff_teams <- unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+      
+      if(teams_have_one_common(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 12
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 12 new matches:", sum(pbp$match_step == 12, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+
+```{r}
+standardize_name <- function(name) {
+  name <- tolower(name)
+  name <- gsub("\\.", "", name)
+  name <- gsub("'", "", name)
+  name <- gsub(" iv$| iii$| ii$| jr$| sr$| v$| vi$", "", name)
+  name
+}
+
+get_first_letter_last_name <- function(name) {
+  parts <- strsplit(name, " ")[[1]]
+  first_letter <- substr(parts[1], 1, 1)
+  last_name <- tail(parts, 1)
+  paste0(tolower(first_letter), " ", tolower(last_name))
+}
+
+teams_have_one_common <- function(teams1, teams2) {
+  teams1 <- teams1[!is.na(teams1)]
+  teams2 <- teams2[!is.na(teams2)]
+  any(teams1 %in% teams2)
+}
+
+years_overlap <- function(start1, end1, start2, end2) {
+  !(end1 < start2 || start1 > end2)
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_teams <- unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+  pbp_name_pattern <- get_first_letter_last_name(standardize_name(pbp$full_name[i]))
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    pff_name_pattern <- get_first_letter_last_name(standardize_name(pff$player[j]))
+    
+    if(pbp_name_pattern == pff_name_pattern &&
+       years_overlap(pff$earliest_year[j], pff$latest_year[j],
+                    pbp$earliest_season[i], pbp$latest_season[i])) {
+      
+      pff_teams <- unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+      
+      if(teams_have_one_common(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 13
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 13 new matches:", sum(pbp$match_step == 13, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+standardize_name <- function(name) {
+  name <- tolower(name)
+  name <- gsub("\\.", "", name)
+  name <- gsub("'", "", name)
+  name <- gsub(" iv$| iii$| ii$| jr$| sr$| v$| vi$", "", name)
+  name
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_std_name <- standardize_name(pbp$full_name[i])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    if(standardize_name(pff$player[j]) == pbp_std_name) {
+      pbp$pff_id[i] <- pff$player_id[j]
+      pbp$match_step[i] <- 14
+      break
+    }
+  }
+}
+
+cat("\nStep 14 new matches:", sum(pbp$match_step == 14, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+standardize_name <- function(name) {
+  name <- tolower(name)
+  name <- gsub("\\.", "", name)
+  name <- gsub("'", "", name)
+  name <- gsub(" iv$| iii$| ii$| jr$| sr$| v$| vi$", "", name)
+  name
+}
+
+extract_name_parts <- function(name) {
+  # Standardize the name first
+  name <- standardize_name(name)
+  # Split on both spaces and hyphens
+  parts <- unlist(strsplit(name, "[ -]"))
+  # Remove any empty strings
+  parts[parts != ""]
+}
+
+teams_have_common <- function(teams1, teams2) {
+  teams1 <- teams1[!is.na(teams1)]
+  teams2 <- teams2[!is.na(teams2)]
+  common_teams <- intersect(teams1, teams2)
+  length(common_teams) >= 1
+}
+
+years_overlap <- function(start1, end1, start2, end2) {
+  !(end1 < start2 || start1 > end2)
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_parts <- extract_name_parts(pbp$full_name[i])
+  pbp_teams <- unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    pff_parts <- extract_name_parts(pff$player[j])
+    
+    # Check if any significant parts match (looking for shared name components)
+    shared_parts <- intersect(pbp_parts, pff_parts)
+    if(length(shared_parts) >= 2 &&  # At least two name parts match
+       pbp$position[i] == pff$position[j] &&  # Same position
+       years_overlap(pff$earliest_year[j], pff$latest_year[j],
+                    pbp$earliest_season[i], pbp$latest_season[i])) {
+      
+      pff_teams <- unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+      
+      if(teams_have_common(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 15
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 15 new matches:", sum(pbp$match_step == 15, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+```{r}
+standardize_name <- function(name) {
+  name <- tolower(name)
+  name <- gsub("\\.", "", name)
+  name <- gsub("'", "", name)
+  name <- gsub(" iv$| iii$| ii$| jr$| sr$| v$| vi$", "", name)
+  name
+}
+
+get_position_group <- function(pos) {
+  if(pos %in% c("T", "G", "C", "OL")) return("OL")
+  if(pos %in% c("K", "P", "LS")) return("ST")
+  if(pos %in% c("WR", "TE")) return("WR/TE")
+  if(pos %in% c("QB")) return("QB")
+  if(pos %in% c("RB", "FB", "HB")) return("RB")
+  if(pos %in% c("DE", "DT", "NT", "DL")) return("DL")
+  if(pos %in% c("LB", "ILB", "OLB", "MLB")) return("LB")
+  if(pos %in% c("CB", "S", "FS", "SS", "DB")) return("DB")
+  return(pos)
+}
+
+get_name_patterns <- function(full_name) {
+  name <- standardize_name(full_name)
+  parts <- strsplit(name, " ")[[1]]
+  first_letter <- substr(parts[1], 1, 1)
+  
+  # Get last name(s)
+  last_name <- tail(parts, 1)
+  # Check if last name is hyphenated
+  if(grepl("-", last_name)) {
+    hyphen_parts <- strsplit(last_name, "-")[[1]]
+    # Return both the first and second parts of hyphenated name
+    return(list(
+      paste0(first_letter, " ", hyphen_parts[1]),
+      paste0(first_letter, " ", hyphen_parts[2])
+    ))
+  } else {
+    return(list(paste0(first_letter, " ", last_name)))
+  }
+}
+
+teams_have_one_common <- function(teams1, teams2) {
+  teams1 <- teams1[!is.na(teams1)]
+  teams2 <- teams2[!is.na(teams2)]
+  any(teams1 %in% teams2)
+}
+
+unmatched_pbp <- which(is.na(pbp$pff_id))
+
+for(i in unmatched_pbp) {
+  if(i %% 100 == 0) cat("Processing player", i, "of", nrow(pbp), "\n")
+  
+  pbp_patterns <- get_name_patterns(pbp$full_name[i])
+  pbp_pos_group <- get_position_group(pbp$position[i])
+  pbp_teams <- unlist(pbp[i, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+  
+  unmatched_pff <- which(!(pff$player_id %in% pbp$pff_id))
+  
+  for(j in unmatched_pff) {
+    pff_patterns <- get_name_patterns(pff$player[j])
+    pff_pos_group <- get_position_group(pff$position[j])
+    
+    # Check if any of the name patterns match
+    name_match <- any(sapply(pbp_patterns, function(p) p %in% unlist(pff_patterns)))
+    
+    if(name_match && pbp_pos_group == pff_pos_group) {
+      pff_teams <- unlist(pff[j, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+      
+      if(teams_have_one_common(pbp_teams, pff_teams)) {
+        pbp$pff_id[i] <- pff$player_id[j]
+        pbp$match_step[i] <- 16
+        break
+      }
+    }
+  }
+}
+
+cat("\nStep 16 new matches:", sum(pbp$match_step == 16, na.rm = TRUE), "\n")
+cat("Total matches so far:", sum(!is.na(pbp$pff_id)), "out of", nrow(pbp), "players\n")
+```
+
+
+
+
+```{r}
+unmatched_pbp <- pbp[is.na(pbp$pff_id), ]
+```
+
+
+# final writing key
+
+```{r}
+# Make sure saves_pbp has same columns as pbp
+saves_pbp$match_step <- NA
+#Remove these cols depth_chart_position and X
+saves_pbp <- saves_pbp[, !(colnames(saves_pbp) %in% c("depth_chart_position", "X"))]
+
+
+# Rbind the dataframes
+final_df <- rbind(pbp, saves_pbp)
+
+write.csv(final_df, "final_key.csv", row.names = FALSE)
+```
+
+
+# mistakes
+
+```{r}
+# Get matched players
+matched_players <- pbp[!is.na(pbp$pff_id), ]
+
+# Create mistakes dataframe
+mistakes_df <- data.frame(
+  pff_id = matched_players$pff_id,
+  gsis_id = matched_players$gsis_id,
+  pff_name = NA,
+  pbp_name = matched_players$full_name,
+  pff_position = NA,
+  pbp_position = matched_players$position,
+  pff_teams = NA,
+  pbp_teams = NA,
+  stringsAsFactors = FALSE
+)
+
+# Add PFF information
+for(i in 1:nrow(mistakes_df)) {
+  # Get corresponding PFF row
+  pff_row <- pff[pff$player_id == mistakes_df$pff_id[i], ]
+  
+  # Add PFF name and position
+  mistakes_df$pff_name[i] <- pff_row$player
+  mistakes_df$pff_position[i] <- pff_row$position
+  
+  # Combine PFF teams
+  pff_teams <- unlist(pff_row[, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+  pff_teams <- pff_teams[!is.na(pff_teams)]
+  mistakes_df$pff_teams[i] <- paste(pff_teams, collapse = ", ")
+  
+  # Get corresponding PBP teams
+  pbp_row <- matched_players[i, ]
+  pbp_teams <- unlist(pbp_row[, c("team1", "team2", "team3", "team4", "team5", "team6", "team7", "team8")])
+  pbp_teams <- pbp_teams[!is.na(pbp_teams)]
+  mistakes_df$pbp_teams[i] <- paste(pbp_teams, collapse = ", ")
+}
+
+# Add match step information
+mistakes_df$match_step <- matched_players$match_step
+
+```

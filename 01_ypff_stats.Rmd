@@ -1,0 +1,258 @@
+---
+title: "ypff_stats"
+output: html_document
+date: "2024-12-31"
+---
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# Function to analyze and combine CSVs for a specific year
+analyze_and_combine_csvs <- function(folder_path) {
+  cat("Analyzing folder:", folder_path, "\n")  # Tracker
+
+  # Get all CSV files in the folder
+  csv_files <- list.files(path = folder_path, pattern = "*.csv", full.names = TRUE)
+
+  # Report how many CSV files are in the folder
+  cat("Number of CSV files in the folder:", length(csv_files), "\n")
+
+  if (length(csv_files) == 0) {
+    cat("No CSV files found in the folder:", folder_path, "\n")
+    return(NULL)
+  }
+
+  # Extract the year from the folder path
+  year <- as.integer(stringr::str_extract(folder_path, "\\d{4}"))
+  cat("Processing year:", year, "\n")  # Tracker
+
+  # Initialize a list to store processed data
+  combined_data <- list()
+
+  for (file_path in csv_files) {
+    report_name <- tools::file_path_sans_ext(basename(file_path))
+    cat("Processing file:", file_path, "\n")  # Tracker
+
+    tryCatch({
+      file_data <- read.csv(file_path)
+      
+      # Add report prefix to column names, except key columns
+      key_cols <- c("player_id", "player", "year")
+      cols_to_rename <- setdiff(names(file_data), key_cols)
+      names(file_data)[names(file_data) %in% cols_to_rename] <- paste0(report_name, "_", cols_to_rename)
+
+      # Add year column
+      file_data <- file_data %>% mutate(year = year)
+
+      # Append to the combined data list
+      combined_data[[report_name]] <- file_data
+
+    }, error = function(e) {
+      cat("Error processing file:", file_path, "\nError message:", e$message, "\n")
+    })
+  }
+
+  if (length(combined_data) == 0) {
+    cat("No data was successfully loaded from:", folder_path, "\n")
+    return(NULL)
+  }
+
+  # Combine all CSVs into one data frame
+  combined_data <- bind_rows(combined_data)
+  cat("Completed combining data for folder:", folder_path, "\n")  # Tracker
+  return(combined_data)
+}
+
+# Function to load PFF data for multiple years
+load_pff_data <- function(base_path, years = 2014:2023) {
+  cat("Starting data loading process...\n")  # Tracker
+  all_data <- list()
+
+  for (year in years) {
+    cat("Loading data for year:", year, "\n")  # Tracker
+    year_folder <- file.path(base_path, as.character(year))
+
+    if (!dir.exists(year_folder)) {
+      cat("Year directory does not exist:", year_folder, "\n")
+      next
+    }
+
+    year_data <- analyze_and_combine_csvs(year_folder)
+
+    if (!is.null(year_data)) {
+      all_data[[as.character(year)]] <- year_data
+      cat("Successfully loaded data for year:", year, "\n")  # Tracker
+    } else {
+      cat("No data loaded for year:", year, "\n")  # Tracker
+    }
+  }
+
+  combined_data <- bind_rows(all_data)
+  cat("Completed loading all data.\n")  # Tracker
+  return(combined_data)
+}
+
+# Function to create base PFF stats with NA-filled rows
+create_pff_stats <- function(pff_data) {
+  cat("Creating base PFF stats...\n")  # Tracker
+  players_df <- pff_data %>% 
+    select(player_id, player) %>% 
+    distinct()
+
+  years <- 2014:2023
+
+  # Create base stats with player-year combinations
+  pff_stats <- players_df %>%
+    tidyr::crossing(year = years) %>%
+    arrange(player_id, year)
+
+  cat("Base PFF stats created with", nrow(pff_stats), "rows.\n")  # Tracker
+  return(pff_stats)
+}
+
+# Function to fill PFF stats with data from reports
+fill_pff_stats <- function(pff_stats, pff_data) {
+  cat("Filling PFF stats with data...\n")  # Tracker
+
+  # Ensure year is integer in both dataframes
+  pff_stats$year <- as.integer(pff_stats$year)
+  pff_data$year <- as.integer(pff_data$year)
+
+  # Select unique rows from pff_data to prevent duplication
+  pff_data <- pff_data %>% 
+    distinct(player_id, year, .keep_all = TRUE)
+
+  # Join the data
+  filled_stats <- pff_stats %>%
+    left_join(pff_data, by = c("player_id", "year"))
+
+  cat("Filling completed. Total rows in filled stats:", nrow(filled_stats), "\n")  # Tracker
+  return(filled_stats)
+}
+
+# Main workflow
+base_path <- "C:/Users/simon/Dropbox/My_Projects/pbp_data_creation/yearly_data"
+
+cat("Starting main workflow...\n")  # Tracker
+
+# Load all PFF data
+pff_data <- load_pff_data(base_path)
+
+# Create the expanded yearly stats
+ypff_stats <- create_pff_stats(pff_data)
+
+# Fill the stats with report data
+ypff_stats <- fill_pff_stats(ypff_stats, pff_data)
+```
+
+```{r}
+# Replace empty strings with NA only in character columns
+ypff_stats <- ypff_stats %>% 
+  mutate(across(where(is.character), ~na_if(., "")))
+```
+
+
+
+```{r}
+# Check for duplicates and save final output
+if (anyDuplicated(ypff_stats)) {
+  cat("Warning: Duplicate rows detected in final stats.\n")
+} else {
+  cat("No duplicate rows detected in final stats.\n")
+}
+
+# Save final data
+library(data.table)
+cat("Saving final data to CSV...\n")  # Tracker
+fwrite(ypff_stats, "ypff_stats.csv.gz", compress = "gzip")
+cat("Data successfully saved to ypff_stats.csv.gz\n")  # Tracker
+```
+
+
+# cleaning 
+
+```{r}
+# Function to clean PFF stats by removing empty rows with progress tracking
+clean_pff_stats <- function(pff_stats) {
+
+    library(progress)
+
+  
+  cat("Starting PFF stats cleaning process...\n")
+  
+  # Get initial dimensions
+  initial_rows <- nrow(pff_stats)
+  initial_cols <- ncol(pff_stats)
+  
+  # Create progress bar
+  pb <- progress_bar$new(
+    format = "Processing [:bar] :percent eta: :eta",
+    total = initial_rows,
+    clear = FALSE,
+    width = 60
+  )
+  
+  # Identify columns to exclude from NA check
+  exclude_cols <- c("player_id", "player.y", "year", "player.x")
+  
+  # Calculate the number of non-NA values for each row with progress tracking
+  cat("\nChecking rows for non-NA values...\n")
+  rows_with_data <- logical(initial_rows)
+  
+  # Process in chunks for better progress tracking
+  chunk_size <- 10000
+  chunks <- split(1:initial_rows, ceiling(seq_along(1:initial_rows)/chunk_size))
+  
+  for(chunk in chunks) {
+    # Process current chunk
+    chunk_data <- pff_stats[chunk, !(names(pff_stats) %in% exclude_cols)]
+    rows_with_data[chunk] <- apply(chunk_data, 1, function(row) sum(!is.na(row))) > 0
+    
+    # Update progress bar
+    pb$tick(length(chunk))
+  }
+  
+  cat("\nFiltering rows...\n")
+  # Filter the dataframe to keep only rows with at least one non-NA value
+  cleaned_stats <- pff_stats[rows_with_data, ]
+  
+  # Calculate statistics
+  final_rows <- nrow(cleaned_stats)
+  rows_removed <- initial_rows - final_rows
+  removal_percentage <- (rows_removed / initial_rows) * 100
+  
+  # Print summary statistics
+  cat("\nCleaning Summary:\n")
+  cat("Initial rows:", initial_rows, "\n")
+  cat("Final rows:", final_rows, "\n")
+  cat("Rows removed:", rows_removed, "\n")
+  cat("Percentage removed:", sprintf("%.2f%%", removal_percentage), "\n")
+  
+  # Calculate and print player statistics
+  initial_players <- length(unique(pff_stats$player_id))
+  final_players <- length(unique(cleaned_stats$player_id))
+  players_removed <- initial_players - final_players
+  
+  cat("\nPlayer Statistics:\n")
+  cat("Initial unique players:", initial_players, "\n")
+  cat("Final unique players:", final_players, "\n")
+  cat("Players completely removed:", players_removed, "\n")
+  
+  # Return the cleaned dataframe
+  return(cleaned_stats)
+}
+```
+
+```{r}
+# Clean the PFF stats with progress tracking
+cypff_stats <- clean_pff_stats(ypff_stats)
+
+```
+
+```{r}
+# Save the cleaned data to a new CSV file
+cat("Saving cleaned data to CSV...\n")
+fwrite(cypff_stats, "cypff_stats.csv.gz", compress = "gzip")
+```
+

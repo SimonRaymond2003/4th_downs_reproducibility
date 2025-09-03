@@ -1,0 +1,79 @@
+---
+title: "Coaches_EXP"
+output: html_document
+date: "2025-07-09"
+---
+
+
+```{r}
+
+library(nflverse)
+pbp_data <- load_pbp(1999:2023)
+```
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+
+
+# --- Data Preparation ---
+# We assume 'pbp_data' is already loaded from the previous chunk.
+
+# 1. Combine home and away coach data into a single long format.
+home_coaches <- pbp_data %>%
+  select(season, team = home_team, coach = home_coach)
+
+away_coaches <- pbp_data %>%
+  select(season, team = away_team, coach = away_coach)
+
+# 2. Create a unified and clean data frame of all coach-team seasons.
+all_coach_seasons <- bind_rows(home_coaches, away_coaches) %>%
+  # Get unique combinations of season, team, and coach
+  distinct() %>%
+  # Remove any rows with missing coach or team names
+  filter(!is.na(coach) & !is.na(team) & team != "")
+
+# 3. Standardize team names to handle franchise relocations.
+# This ensures a coach's tenure is continuous if the team moves.
+all_coach_seasons_std <- all_coach_seasons %>%
+  mutate(franchise = case_when(
+    team %in% c("STL", "LA") ~ "LAR", # St. Louis/Los Angeles Rams
+    team %in% c("SD", "LAC") ~ "LAC", # San Diego/Los Angeles Chargers
+    team %in% c("OAK", "LV") ~ "LVR", # Oakland/Las Vegas Raiders
+    TRUE ~ team
+  ))
+
+
+# --- Create the Indexes ---
+
+# 1. Coach Experience Index
+# This index finds the very first season each coach appears in the data.
+coach_experience_index <- all_coach_seasons_std %>%
+  group_by(coach) %>%
+  summarise(
+    first_season_experience = min(season)
+  ) %>%
+  arrange(coach)
+
+# 2. Coach Tenure Index
+# This index finds the start of every distinct stint for a coach with a franchise.
+coach_tenure_index <- all_coach_seasons_std %>%
+  # Arrange data to easily compare consecutive seasons
+  arrange(coach, franchise, season) %>%
+  group_by(coach, franchise) %>%
+  # A new stint starts if the current season is not one year after the last
+  filter(season != lag(season, 1) + 1 | is.na(lag(season, 1))) %>%
+  # Select and rename columns for the final index
+  select(coach, team = franchise, first_season_of_stint = season) %>%
+  ungroup()
+
+# Save the Coach Experience Index to a CSV file
+write.csv(coach_experience_index, "coach_experience_index.csv", row.names = FALSE)
+
+# Save the Coach Tenure Index to a CSV file
+write.csv(coach_tenure_index, "coach_tenure_index.csv", row.names = FALSE)
+
+```
+

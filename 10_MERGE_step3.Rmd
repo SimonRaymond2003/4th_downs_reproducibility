@@ -1,0 +1,310 @@
+---
+title: "MERGE_step3"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+### going back 12 weeks
+
+```{r}
+# Load required libraries
+library(data.table)
+
+# Read data files
+final_key <- fread("final_key.csv")
+cfd <- fread("cfd.csv")
+pff_stats <- fread("pff_stats.csv.gz")
+
+# Identify column types
+logical_cols <- names(pff_stats)[sapply(pff_stats, is.logical)]
+integer_cols <- names(pff_stats)[sapply(pff_stats, is.integer)]
+numeric_cols <- setdiff(names(pff_stats)[sapply(pff_stats, is.numeric)], 
+                       c("player_id", "year", "week"))
+character_cols <- names(pff_stats)[sapply(pff_stats, is.character)]
+```
+
+
+```{r}
+# Convert logical and integer columns to numeric
+for(col in c(logical_cols, integer_cols)) {
+  pff_stats[, (col) := as.numeric(get(col))]
+}
+
+# Function to get mode (most frequent value)
+get_mode <- function(x) {
+  if (length(x) == 0) return(NA)
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+```
+
+
+```{r}
+cat("Precalculating player statistics...\n")
+total_players <- uniqueN(pff_stats$player_id)
+
+player_stats_lookup <- pff_stats[, {
+  player_num <- which(sort(unique(pff_stats$player_id)) == .BY$player_id)
+  cat(sprintf("\rProcessing Player %d/%d", player_num, total_players))
+  
+  all_time_points <- unique(pff_stats[, .(year, week)])
+  results <- lapply(1:nrow(all_time_points), function(i) {
+    current_year <- all_time_points$year[i]
+    current_week <- all_time_points$week[i]
+    
+    prev_stats <- .SD[year < current_year | (year == current_year & week < current_week)
+                     ][order(-year, -week)][1:12]
+    
+    if(nrow(prev_stats) == 0) {
+      avg_stats <- as.data.table(lapply(numeric_cols, function(x) NA_real_))
+      setnames(avg_stats, numeric_cols)
+      char_stats <- as.data.table(lapply(character_cols, function(x) NA_character_))
+      setnames(char_stats, character_cols)
+    } else {
+      avg_stats <- prev_stats[, lapply(.SD, mean, na.rm = TRUE), .SDcols = numeric_cols]
+      char_stats <- prev_stats[, lapply(.SD, get_mode), .SDcols = character_cols]
+    }
+    
+    cbind(
+      data.table(
+        year = current_year,
+        week = current_week,
+        weeks_found = nrow(prev_stats),
+        missing_weeks = 12 - nrow(prev_stats)
+      ),
+      avg_stats,
+      char_stats
+    )
+  })
+  rbindlist(results)
+}, by = player_id]
+cat("\nDone!")
+```
+
+wright out the player aggregated stats to csv gz
+```{r}
+fwrite(player_stats_lookup, "player_stats_lookup.csv.gz")
+```
+
+### going back 2 weeks
+
+```{r}
+# Load required libraries
+library(data.table)
+# Read data files
+final_key <- fread("final_key.csv")
+cfd <- fread("cfd.csv")
+pff_stats <- fread("pff_stats.csv.gz")
+
+# Identify column types
+logical_cols <- names(pff_stats)[sapply(pff_stats, is.logical)]
+integer_cols <- names(pff_stats)[sapply(pff_stats, is.integer)]
+numeric_cols <- setdiff(names(pff_stats)[sapply(pff_stats, is.numeric)], 
+                       c("player_id", "year", "week"))
+character_cols <- names(pff_stats)[sapply(pff_stats, is.character)]
+
+# Convert logical and integer columns to numeric
+for(col in c(logical_cols, integer_cols)) {
+  pff_stats[, (col) := as.numeric(get(col))]
+}
+
+# Function to get mode (most frequent value)
+get_mode <- function(x) {
+  if (length(x) == 0) return(NA)
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+cat("Precalculating player statistics...\n")
+
+total_players <- uniqueN(pff_stats$player_id)
+player_stats_lookup2 <- pff_stats[, {
+  player_num <- which(sort(unique(pff_stats$player_id)) == .BY$player_id)
+  cat(sprintf("\rProcessing Player %d/%d", player_num, total_players))
+  
+  all_time_points <- unique(pff_stats[, .(year, week)])
+  results <- lapply(1:nrow(all_time_points), function(i) {
+    current_year <- all_time_points$year[i]
+    current_week <- all_time_points$week[i]
+    
+    prev_stats <- .SD[year < current_year | (year == current_year & week < current_week)
+                     ][order(-year, -week)][1:2]  # Changed from 12 to 2
+    
+    if(nrow(prev_stats) == 0) {
+      avg_stats <- as.data.table(lapply(numeric_cols, function(x) NA_real_))
+      setnames(avg_stats, numeric_cols)
+      char_stats <- as.data.table(lapply(character_cols, function(x) NA_character_))
+      setnames(char_stats, character_cols)
+    } else {
+      avg_stats <- prev_stats[, lapply(.SD, mean, na.rm = TRUE), .SDcols = numeric_cols]
+      char_stats <- prev_stats[, lapply(.SD, get_mode), .SDcols = character_cols]
+    }
+    
+    cbind(
+      data.table(
+        year = current_year,
+        week = current_week,
+        weeks_found = nrow(prev_stats),
+        missing_weeks = 2 - nrow(prev_stats)  # Changed from 12 to 2
+      ),
+      avg_stats,
+      char_stats
+    )
+  })
+  rbindlist(results)
+}, by = player_id]
+cat("\nDone!")
+
+# Write out the player aggregated stats to csv gz
+fwrite(player_stats_lookup2, "player_stats_lookup2.csv.gz")
+```
+
+what is a nan
+
+get this player from pff stats 2947
+
+```{r}
+PLAYER2947 <- pff_stats[player_id == 2947]
+```
+
+```{r}
+test <- player_stats_lookup2[player_id == 2947]
+```
+
+
+
+
+### previous 3 seasons 
+
+this will just look at the past 3 years as a whole
+
+```{r}
+library(data.table)
+
+# Read data
+ypff_stats <- fread("ypff_stats.csv.gz")
+
+# Identify column types
+logical_cols <- names(ypff_stats)[sapply(ypff_stats, is.logical)]
+integer_cols <- names(ypff_stats)[sapply(ypff_stats, is.integer)]
+numeric_cols <- setdiff(names(ypff_stats)[sapply(ypff_stats, is.numeric)], 
+                     c("player_id", "year"))
+character_cols <- names(ypff_stats)[sapply(ypff_stats, is.character)]
+
+# Convert logical and integer columns to numeric
+for(col in c(logical_cols, integer_cols)) {
+  ypff_stats[, (col) := as.numeric(get(col))]
+}
+
+# Function to get mode
+get_mode <- function(x) {
+  if (length(x) == 0) return(NA)
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+cat("Calculating 3-year lookback player statistics...\n")
+total_players <- uniqueN(ypff_stats$player_id)
+
+player_yearly_lookup3 <- ypff_stats[, {
+  player_num <- which(sort(unique(ypff_stats$player_id)) == .BY$player_id)
+  cat(sprintf("\rProcessing Player %d/%d", player_num, total_players))
+  
+  all_years <- unique(ypff_stats$year)
+  results <- lapply(all_years, function(current_year) {
+    prev_stats <- .SD[year < current_year][order(-year)][1:3]
+    
+    if(nrow(prev_stats) == 0) {
+      avg_stats <- as.data.table(lapply(numeric_cols, function(x) NA_real_))
+      setnames(avg_stats, numeric_cols)
+      char_stats <- as.data.table(lapply(character_cols, function(x) NA_character_))
+      setnames(char_stats, character_cols)
+    } else {
+      avg_stats <- prev_stats[, lapply(.SD, mean, na.rm = TRUE), .SDcols = numeric_cols]
+      char_stats <- prev_stats[, lapply(.SD, get_mode), .SDcols = character_cols]
+    }
+    
+    cbind(
+      data.table(
+        year = current_year,
+        years_found = nrow(prev_stats),
+        missing_years = 3 - nrow(prev_stats)
+      ),
+      avg_stats,
+      char_stats
+    )
+  })
+  rbindlist(results)
+}, by = player_id]
+cat("\nDone!")
+
+# Write results
+fwrite(player_yearly_lookup3, "player_yearly_lookup3.csv.gz")
+```
+
+
+```{r}
+library(data.table)
+ypff_stats <- fread("ypff_stats.csv.gz")
+
+# More robust column type identification
+numeric_cols <- names(ypff_stats)[sapply(ypff_stats, function(x) {
+  is.numeric(x) || is.integer(x) || is.logical(x)
+})]
+numeric_cols <- setdiff(numeric_cols, c("player_id", "year"))
+
+character_cols <- names(ypff_stats)[sapply(ypff_stats, is.character)]
+
+# Convert all numeric-like columns to numeric
+for(col in numeric_cols) {
+  ypff_stats[, (col) := as.numeric(get(col))]
+}
+
+get_mode <- function(x) {
+  if (length(x) == 0) return(NA)
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+cat("Calculating 3-year lookback player statistics...\n")
+total_players <- uniqueN(ypff_stats$player_id)
+
+player_yearly_lookup3 <- ypff_stats[, {
+  player_num <- which(sort(unique(ypff_stats$player_id)) == .BY$player_id)
+  cat(sprintf("\rProcessing Player %d/%d", player_num, total_players))
+  
+  all_years <- unique(ypff_stats$year)
+  results <- lapply(all_years, function(current_year) {
+    prev_stats <- .SD[year < current_year][order(-year)][1:3]
+    
+    if(nrow(prev_stats) == 0) {
+      avg_stats <- as.data.table(lapply(numeric_cols, function(x) NA_real_))
+      setnames(avg_stats, numeric_cols)
+      char_stats <- as.data.table(lapply(character_cols, function(x) NA_character_))
+      setnames(char_stats, character_cols)
+    } else {
+      avg_stats <- prev_stats[, lapply(.SD, function(x) if(all(is.na(x))) NA_real_ else mean(x, na.rm = TRUE)), 
+                             .SDcols = numeric_cols]
+      char_stats <- prev_stats[, lapply(.SD, get_mode), .SDcols = character_cols]
+    }
+    
+    cbind(
+      data.table(
+        year = current_year,
+        years_found = nrow(prev_stats),
+        missing_years = 3 - nrow(prev_stats)
+      ),
+      avg_stats,
+      char_stats
+    )
+  })
+  rbindlist(results)
+}, by = player_id]
+
+fwrite(player_yearly_lookup3, "player_yearly_lookup3.csv.gz")
+```
+
+
+

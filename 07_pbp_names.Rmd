@@ -1,0 +1,228 @@
+---
+title: "pbp_names"
+output: html_document
+date: "2024-12-18"
+---
+read the pbp data
+# ```{r}
+# library(readr)
+# cfd <- read_csv("cfd.csv")
+# ctd <- read_csv("ctd.csv")
+# ```
+# 
+# ```{r}
+# ## Create list of column names with correct format
+# gsis_id_columns <- c(
+#   # Season and week
+#   "season", "week",
+#   # Players (offense and defense numbered)
+#   paste0("offense_player_", 1:11),
+#   paste0("defense_player_", 1:11),
+#   # Special teams
+#   "kicker_player_id", 
+#   "punter_player_id"
+# )
+# 
+# # Create dataframes with only these columns for both datasets
+# gsis_df_cfd <- cfd %>% select(all_of(gsis_id_columns))
+# gsis_df_ctd <- ctd %>% select(all_of(gsis_id_columns))
+# 
+# # Create single column dataframes of all unique IDs from each dataset
+# unique_ids_cfd <- gsis_df_cfd %>%
+#   select(-season, -week) %>%
+#   unlist() %>%
+#   unique() %>%
+#   na.omit() %>%
+#   as.data.frame()
+# 
+# unique_ids_ctd <- gsis_df_ctd %>%
+#   select(-season, -week) %>%
+#   unlist() %>%
+#   unique() %>%
+#   na.omit() %>%
+#   as.data.frame()
+# 
+# # Rename the columns
+# names(unique_ids_cfd) <- "gsis_id"
+# names(unique_ids_ctd) <- "gsis_id"
+# 
+# # Combine both and get unique IDs across both datasets
+# all_unique_ids <- unique(c(unique_ids_cfd$gsis_id, unique_ids_ctd$gsis_id)) %>%
+#   as.data.frame()
+# names(all_unique_ids) <- "gsis_id"
+# 
+# # Print summary
+# cat("Unique IDs in CFD:", nrow(unique_ids_cfd), "\n")
+# cat("Unique IDs in CTD:", nrow(unique_ids_ctd), "\n")
+# cat("Total unique IDs across both datasets:", nrow(all_unique_ids))
+# ```
+# write pbp_unique_ids to csv
+# ```{r}
+# write_csv(all_unique_ids, "pbp_unique_ids.csv")
+# ```
+# 
+# 
+
+```{r}
+# Independent script to create lite versions of cfd and ctd with GSIS IDs
+library(dplyr)
+library(nflverse)
+library(tidyr)
+library(readr)
+
+# Define the columns we need for GSIS ID extraction
+gsis_id_columns <- c(
+  # Season and week
+  "season", "week",
+  # Players (offense and defense numbered)
+  paste0("offense_player_", 1:11),
+  paste0("defense_player_", 1:11),
+  # Special teams
+  "kicker_player_id", 
+  "punter_player_id"
+)
+
+# Process years to create lite versions
+years <- 2017:2023
+all_third_downs <- list()
+all_fourth_downs <- list()
+
+for(year in years) {
+  message(paste("\nProcessing year:", year))
+  
+  # Load play-by-play data
+  play_year <- load_pbp(year)
+  
+  # Load participation data
+  participation_data <- load_participation(year) %>%
+    select(
+      nflverse_game_id,
+      play_id,
+      offense_players,
+      defense_players
+    )
+  
+  # Extract third downs
+  third_downs_lite <- play_year %>%
+    filter(down == 3) %>%
+    select(play_id, game_id, week, posteam, home_team, away_team) %>%
+    mutate(season = year) %>%
+    left_join(participation_data, 
+              by = c("game_id" = "nflverse_game_id", "play_id" = "play_id"))
+  
+  # Extract fourth downs
+  fourth_downs_lite <- play_year %>%
+    filter(down == 4) %>%
+    select(play_id, game_id, week, posteam, home_team, away_team) %>%
+    mutate(season = year) %>%
+    left_join(participation_data, 
+              by = c("game_id" = "nflverse_game_id", "play_id" = "play_id"))
+  
+  # Parse player strings into individual columns
+  # For third downs
+  for(i in 1:11) {
+    third_downs_lite[[paste0("offense_player_", i)]] <- sapply(
+      strsplit(third_downs_lite$offense_players, ";"), 
+      function(x) if(length(x) >= i) x[i] else NA
+    )
+    third_downs_lite[[paste0("defense_player_", i)]] <- sapply(
+      strsplit(third_downs_lite$defense_players, ";"), 
+      function(x) if(length(x) >= i) x[i] else NA
+    )
+  }
+  
+  # For fourth downs
+  for(i in 1:11) {
+    fourth_downs_lite[[paste0("offense_player_", i)]] <- sapply(
+      strsplit(fourth_downs_lite$offense_players, ";"), 
+      function(x) if(length(x) >= i) x[i] else NA
+    )
+    fourth_downs_lite[[paste0("defense_player_", i)]] <- sapply(
+      strsplit(fourth_downs_lite$defense_players, ";"), 
+      function(x) if(length(x) >= i) x[i] else NA
+    )
+  }
+  
+  # Add kicker and punter IDs
+  # Get specialists for this year
+  pbp_specialists <- play_year
+  
+  # Get kickers
+  kickers <- pbp_specialists %>%
+    filter(field_goal_attempt == 1 | extra_point_attempt == 1) %>%
+    select(team = posteam, week, kicker_player_id) %>%
+    distinct(team, week, .keep_all = TRUE)
+  
+  # Get punters
+  punters <- pbp_specialists %>%
+    filter(punt_attempt == 1) %>%
+    select(team = posteam, week, punter_player_id) %>%
+    distinct(team, week, .keep_all = TRUE)
+  
+  # Join specialists to third downs
+  third_downs_lite <- third_downs_lite %>%
+    left_join(kickers, by = c("posteam" = "team", "week")) %>%
+    left_join(punters, by = c("posteam" = "team", "week"))
+  
+  # Join specialists to fourth downs
+  fourth_downs_lite <- fourth_downs_lite %>%
+    left_join(kickers, by = c("posteam" = "team", "week")) %>%
+    left_join(punters, by = c("posteam" = "team", "week"))
+  
+  # Store in lists
+  all_third_downs[[as.character(year)]] <- third_downs_lite
+  all_fourth_downs[[as.character(year)]] <- fourth_downs_lite
+}
+
+# Combine all years
+ctd_lite <- bind_rows(all_third_downs)
+cfd_lite <- bind_rows(all_fourth_downs)
+
+# Filter regular season only
+ctd_lite <- ctd_lite %>%
+  filter(
+    (season < 2021 & week <= 17) |
+    (season >= 2021 & week <= 18)
+  )
+
+cfd_lite <- cfd_lite %>%
+  filter(
+    (season < 2021 & week <= 17) |
+    (season >= 2021 & week <= 18)
+  )
+
+# Now extract unique GSIS IDs
+# Process CTD (third downs)
+unique_ids_ctd <- ctd_lite %>%
+  select(all_of(gsis_id_columns[-(1:2)])) %>%  # Remove season and week
+  unlist() %>%
+  unique() %>%
+  na.omit() %>%
+  as.data.frame()
+
+names(unique_ids_ctd) <- "gsis_id"
+
+# Process CFD (fourth downs)
+unique_ids_cfd <- cfd_lite %>%
+  select(all_of(gsis_id_columns[-(1:2)])) %>%  # Remove season and week
+  unlist() %>%
+  unique() %>%
+  na.omit() %>%
+  as.data.frame()
+
+names(unique_ids_cfd) <- "gsis_id"
+
+# Combine both and get unique IDs across both datasets
+all_unique_ids <- unique(c(unique_ids_cfd$gsis_id, unique_ids_ctd$gsis_id)) %>%
+  as.data.frame()
+names(all_unique_ids) <- "gsis_id"
+
+# Print summary
+cat("Unique IDs in CFD:", nrow(unique_ids_cfd), "\n")
+cat("Unique IDs in CTD:", nrow(unique_ids_ctd), "\n")
+cat("Total unique IDs across both datasets:", nrow(all_unique_ids), "\n")
+
+# Write to CSV
+write_csv(all_unique_ids, "pbp_unique_gsis_ids.csv")
+```
+
