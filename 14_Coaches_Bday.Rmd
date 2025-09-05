@@ -1,0 +1,90 @@
+---
+title: "Coaches_Bday"
+output: html_document
+date: "2025-07-07"
+---
+
+
+```{r}
+library(data.table)
+
+# Read the new unified datasets
+cafd_unified <- fread("predict_cafd_unified.csv.gz")
+cfd_unified <- fread("predict_cfd_unified.csv.gz")
+ctd_unified <- fread("predict_ctd_unified.csv.gz")
+
+# Extract unique coach names from all three datasets
+# Combine all coach names and get unique values
+all_coaches <- unique(c(
+  cafd_unified$posteam_coach,
+  cfd_unified$posteam_coach,
+  ctd_unified$posteam_coach
+))
+
+# Remove any NA values
+all_coaches <- all_coaches[!is.na(all_coaches)]
+
+# Create a data frame with unique coach names
+unique_coaches_df <- data.frame(
+  coach_name = all_coaches
+)
+
+# Sort alphabetically for easier reading
+unique_coaches_df <- unique_coaches_df[order(unique_coaches_df$coach_name), , drop = FALSE]
+```
+
+
+```{r}
+# Create coaches dataframe with names and birth years
+coaches <- data.frame(
+  coach_name = c(
+    "Adam Gase", "Andy Reid", "Anthony Lynn", "Antonio Pierce",
+    "Arthur Smith", "Ben McAdoo", "Bill Belichick", "Bill Callahan",
+    "Bill O'Brien", "Brandon Staley", "Brian Daboll", "Brian Flores",
+    "Bruce Arians", "Chris Tabor", "Chuck Pagano", "Dan Campbell",
+    "Dan Quinn", "Darrell Bevell", "David Culley", "DeMeco Ryans",
+    "Dennis Allen", "Dirk Koetter", "Doug Marrone", "Doug Pederson",
+    "Frank Reich", "Freddie Kitchens", "Giff Smith", "Gregg Williams",
+    "Hue Jackson", "Jason Garrett", "Jay Gruden", "Jay Rosburg",
+    "Jeff Saturday", "Jim Caldwell", "Joe Judge", "Joe Philbin",
+    "John Fox", "John Harbaugh", "Jon Gruden", "Jonathan Gannon",
+    "Josh McDaniels", "Kevin O'Connell", "Kevin Stefanski", "Kliff Kingsbury",
+    "Kyle Shanahan", "Lovie Smith", "Marvin Lewis", "Matt Eberflus",
+    "Matt LaFleur", "Matt Nagy", "Matt Patricia", "Matt Rhule",
+    "Mike McCarthy", "Mike McDaniel", "Mike Mularkey", "Mike Tomlin",
+    "Mike Vrabel", "Mike Zimmer", "Nathaniel Hackett", "Nick Sirianni",
+    "Pat Shurmur", "Pete Carroll", "Raheem Morris", "Rich Bisaccia",
+    "Robert Saleh", "Romeo Crennel", "Ron Rivera", "Sean McDermott",
+    "Sean McVay", "Sean Payton", "Shane Steichen", "Steve Spagnuolo",
+    "Steve Wilks", "Todd Bowles", "Urban Meyer", "Vance Joseph",
+    "Vic Fangio", "Zac Taylor"
+  ),
+  birth_year = c(
+    1978, 1958, 1968, 1978,
+    1982, 1977, 1952, 1956,
+    1969, 1982, 1975, 1981,
+    1952, 1971, 1960, 1976,
+    1970, 1970, 1955, 1984,
+    1972, 1959, 1964, 1968,
+    1961, 1974, 1968, 1958,
+    1965, 1966, 1967, 1955,
+    1975, 1955, 1981, 1961,
+    1955, 1962, 1963, 1983,
+    1976, 1985, 1982, 1979,
+    1979, 1958, 1958, 1970,
+    1979, 1978, 1974, 1975,
+    1963, 1983, 1961, 1972,
+    1975, 1956, 1979, 1981,
+    1965, 1951, 1976, 1960,
+    1979, 1947, 1962, 1974,
+    1986, 1963, 1985, 1959,
+    1969, 1963, 1964, 1972,
+    1958, 1983
+  )
+)
+
+#write to a csv
+write.csv(coaches, "coaches.csv", row.names = FALSE)
+```
+
+

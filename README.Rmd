@@ -13,9 +13,216 @@ Download all the weekly regular season game reports from 2016 to 2023.
 
 Organize the directory as such:
 
+```
+PFF_Data/
+├── Blocking_Reports/
+│   ├── Blocking_Reports_2016/
+│   │   ├── Blocking_Grades_2016/
+│   │   ├── Pass_Blocking_2016/
+│   │   └── Run_Blocking_2016/
+│   ├── Blocking_Reports_2017/
+│   │   ├── Blocking_Grades_2017/
+│   │   ├── Pass_Blocking_2017/
+│   │   └── Run_Blocking_2017/
+│   ├── Blocking_Reports_2018/
+│   │   ├── Blocking_Grades_2018/
+│   │   ├── Pass_Blocking_2018/
+│   │   └── Run_Blocking_2018/
+│   ├── Blocking_Reports_2019/
+│   │   ├── Blocking_Grades_2019/
+│   │   ├── Pass_Blocking_2019/
+│   │   └── Run_Blocking_2019/
+│   ├── Blocking_Reports_2020/
+│   │   ├── Blocking_Grades_2020/
+│   │   ├── Pass_Blocking_2020/
+│   │   └── Run_Blocking_2020/
+│   ├── Blocking_Reports_2021/
+│   │   ├── Blocking_Grades_2021/
+│   │   ├── Pass_Blocking_2021/
+│   │   └── Run_Blocking_2021/
+│   ├── Blocking_Reports_2022/
+│   │   ├── Blocking_Grades_2022/
+│   │   ├── Pass_Blocking_2022/
+│   │   └── Run_Blocking_2022/
+│   └── Blocking_Reports_2023/
+│       ├── Blocking_Grades_2023/
+│       ├── Pass_Blocking_2023/
+│       └── Run_Blocking_2023/
+├── Defensive_Reports/
+│   ├── Defensive_Reports_2016/
+│   │   ├── Coverage_Grades_2016/
+│   │   ├── Coverage_Schemes_2016/
+│   │   ├── Defensive_Grades_2016/
+│   │   ├── Pass_Rush_Grades_2016/
+│   │   ├── Pass_Rushing_Productivity_2016/
+│   │   ├── Run_Defense_Grades_2016/
+│   │   └── Slot_Coverage_2016/
+│   ├── Defensive_Reports_2017/
+│   │   ├── Coverage_Grades_2017/
+│   │   ├── Coverage_Schemes_2017/
+│   │   ├── Defensive_Grades_2017/
+│   │   ├── Pass_Rush_Grades_2017/
+│   │   ├── Pass_Rushing_Productivity_2017/
+│   │   ├── Run_Defense_Grades_2017/
+│   │   └── Slot_Coverage_2017/
+│   ├── Defensive_Reports_2018/
+│   │   ├── Coverage_Grades_2018/
+│   │   ├── Coverage_Schemes_2018/
+│   │   ├── Defensive_Grades_2018/
+│   │   ├── Pass_Rush_Grades_2018/
+│   │   ├── Pass_Rushing_Productivity_2018/
+│   │   ├── Run_Defense_Grades_2018/
+│   │   └── Slot_Coverage_2018/
+│   ├── Defensive_Reports_2019/
+│   │   ├── Coverage_Grades_2019/
+│   │   ├── Coverage_Schemes_2019/
+│   │   ├── Defensive_Grades_2019/
+│   │   ├── Pass_Rush_Grades_2019/
+│   │   ├── Pass_Rushing_Productivity_2019/
+│   │   ├── Run_Defense_Grades_2019/
+│   │   └── Slot_Coverage_2019/
+│   ├── Defensive_Reports_2020/
+│   │   ├── Coverage_Grades_2020/
+│   │   ├── Coverage_Schemes_2020/
+│   │   ├── Defensive_Grades_2020/
+│   │   ├── Pass_Rush_Grades_2020/
+│   │   ├── Pass_Rushing_Productivity_2020/
+│   │   ├── Run_Defense_Grades_2020/
+│   │   └── Slot_Coverage_2020/
+│   ├── Defensive_Reports_2021/
+│   │   ├── Coverage_Grades_2021/
+│   │   ├── Coverage_Schemes_2021/
+│   │   ├── Defensive_Grades_2021/
+│   │   ├── Pass_Rush_Grades_2021/
+│   │   ├── Pass_Rushing_Productivity_2021/
+│   │   ├── Run_Defense_Grades_2021/
+│   │   └── Slot_Coverage_2021/
+│   ├── Defensive_Reports_2022/
+│   │   ├── Coverage_Grades_2022/
+│   │   ├── Coverage_Schemes_2022/
+│   │   ├── Defensive_Grades_2022/
+│   │   ├── Pass_Rush_Grades_2022/
+│   │   ├── Pass_Rushing_Productivity_2022/
+│   │   ├── Run_Defense_Grades_2022/
+│   │   └── Slot_Coverage_2022/
+│   └── Defensive_Reports_2023/
+│       ├── Coverage_Grades_2023/
+│       ├── Coverage_Schemes_2023/
+│       ├── Defensive_Grades_2023/
+│       ├── Pass_Rush_Grades_2023/
+│       ├── Pass_Rushing_Productivity_2023/
+│       ├── Run_Defense_Grades_2023/
+│       └── Slot_Coverage_2023/
+├── Passing_Reports/
+│   ├── Passing_Reports_2016/
+│   │   ├── Allowed_Pressure_2016/
+│   │   ├── Passing_Concept_2016/
+│   │   ├── Passing_Depth_2016/
+│   │   ├── Passing_Grades_2016/
+│   │   ├── Passing_Pressure_2016/
+│   │   └── Time_In_Pocket_2016/
+│   ├── Passing_Reports_2017/
+│   │   ├── Allowed_Pressure_2017/
+│   │   ├── Passing_Concept_2017/
+│   │   ├── Passing_Depth_2017/
+│   │   ├── Passing_Grades_2017/
+│   │   ├── Passing_Pressure_2017/
+│   │   └── Time_In_Pocket_2017/
+│   ├── Passing_Reports_2018/
+│   │   ├── Allowed_Pressure_2018/
+│   │   ├── Passing_Concept_2018/
+│   │   ├── Passing_Depth_2018/
+│   │   ├── Passing_Grades_2018/
+│   │   ├── Passing_Pressure_2018/
+│   │   └── Time_In_Pocket_2018/
+│   ├── Passing_Reports_2019/
+│   │   ├── Allowed_Pressure_2019/
+│   │   ├── Passing_Concept_2019/
+│   │   ├── Passing_Depth_2019/
+│   │   ├── Passing_Grades_2019/
+│   │   ├── Passing_Pressure_2019/
+│   │   └── Time_In_Pocket_2019/
+│   ├── Passing_Reports_2020/
+│   │   ├── Allowed_Pressure_2020/
+│   │   ├── Passing_Concept_2020/
+│   │   ├── Passing_Depth_2020/
+│   │   ├── Passing_Grades_2020/
+│   │   ├── Passing_Pressure_2020/
+│   │   └── Time_In_Pocket_2020/
+│   ├── Passing_Reports_2021/
+│   │   ├── Allowed_Pressure_2021/
+│   │   ├── Passing_Concept_2021/
+│   │   ├── Passing_Depth_2021/
+│   │   ├── Passing_Grades_2021/
+│   │   ├── Passing_Pressure_2021/
+│   │   └── Time_In_Pocket_2021/
+│   ├── Passing_Reports_2022/
+│   │   ├── Allowed_Pressure_2022/
+│   │   ├── Passing_Concept_2022/
+│   │   ├── Passing_Depth_2022/
+│   │   ├── Passing_Grades_2022/
+│   │   ├── Passing_Pressure_2022/
+│   │   └── Time_In_Pocket_2022/
+│   └── Passing_Reports_2023/
+│       ├── Allowed_Pressure_2023/
+│       ├── Passing_Concept_2023/
+│       ├── Passing_Depth_2023/
+│       ├── Passing_Grades_2023/
+│       ├── Passing_Pressure_2023/
+│       └── Time_In_Pocket_2023/
+├── Receiving_Reports/
+│   ├── Receiving_Reports_2016/
+│   │   ├── Receiving_Concept_2016/
+│   │   ├── Receiving_Depth_2016/
+│   │   ├── Receiving_Grades_2016/
+│   │   └── Receiving_Vs_Scheme_2016/
+│   ├── Receiving_Reports_2017/
+│   │   ├── Receiving_Concept_2017/
+│   │   ├── Receiving_Depth_2017/
+│   │   ├── Receiving_Grades_2017/
+│   │   └── Receiving_Vs_Scheme_2017/
+│   ├── Receiving_Reports_2018/
+│   │   ├── Receiving_Concept_2018/
+│   │   ├── Receiving_Depth_2018/
+│   │   └── Receiving_Grades_2018/
+│   ├── Receiving_Reports_2019/
+│   ├── Receiving_Reports_2020/
+│   ├── Receiving_Reports_2021/
+│   ├── Receiving_Reports_2022/
+│   └── Receiving_Reports_2023/
+├── Rushing_Reports/
+│   ├── Rushing_Reports_2016/
+│   ├── Rushing_Reports_2017/
+│   ├── Rushing_Reports_2018/
+│   ├── Rushing_Reports_2019/
+│   ├── Rushing_Reports_2020/
+│   ├── Rushing_Reports_2021/
+│   ├── Rushing_Reports_2022/
+│   └── Rushing_Reports_2023/
+├── Special_Teams_Reports/
+    ├── Special_Teams_Reports_2016/
+    ├── Special_Teams_Reports_2017/
+    ├── Special_Teams_Reports_2018/
+    ├── Special_Teams_Reports_2019/
+    ├── Special_Teams_Reports_2020/
+    ├── Special_Teams_Reports_2021/
+    ├── Special_Teams_Reports_2022/
+    └── Special_Teams_Reports_2023/
+```
 
+Then for the yearly data we arrange all 26 yearly reports/csvs into a directory as such:
 
-
-
-
-
+```
+yearly_data/
+├── 2013 (not entirly availible)/
+├── 2014/
+├── 2015/
+├── 2016/
+├── 2017/
+├── 2018/
+├── 2019/
+├── 2020/
+├── 2021/
+├── 2022/
+└── 2023/
+```
