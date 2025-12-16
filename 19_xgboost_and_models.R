@@ -4,12 +4,12 @@
 # ==============================================================================
 
 # Number of bootstrap samples for FINAL validation (after winner is selected)
-n_bootstrap <- 100
+n_bootstrap <- 1000
 
 # Tuning strategy parameters
-max_loops <- 10          # Maximum number of loops before stopping
-stable_winner_loops <- 10    # Stop if same combo is #1 for this many consecutive loops
-drop_percentage <- 0.0     # Drop bottom X% each loop (0.10 = drop bottom 10%, 0 = don't drop any) 
+max_loops <- 150          # Maximum number of loops before stopping
+stable_winner_loops <- 75    # Stop if same combo is #1 for this many consecutive loops
+drop_percentage <- 0.01     # Drop bottom X% each loop (0.10 = drop bottom 10%, 0 = don't drop any) 
 
 
 
@@ -17,7 +17,7 @@ drop_percentage <- 0.0     # Drop bottom X% each loop (0.10 = drop bottom 10%, 0
 # All parameters are included - edit ranges as needed for tuning
 hyper_grid <- expand.grid(
   # Boosting parameters
-  nrounds = seq(1, 25001, by = 1000),  
+  nrounds = seq(1, 2000, by = 50),  
   eta = c(0.01),         
   
   # Tree structure parameters

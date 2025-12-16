@@ -212,7 +212,7 @@ Then for the yearly data we arrange all 26 yearly reports/csvs into a
 directory as such:
 
     yearly_data/
-    ├── 2013 (not entirly availible)/
+    ├── 2013 (not entirly availible when i downloaded)/
     ├── 2014/
     ├── 2015/
     ├── 2016/
